@@ -1,11 +1,21 @@
 import os
 
 from openai import OpenAI
+import streamlit as st
+
+
+def obtener_api_key():
+    api_key = os.getenv("OPENROUTER_API_KEY")
+
+    if api_key:
+        return api_key
+
+    return st.secrets.get("OPENROUTER_API_KEY")
 
 
 class ChatbotOpenRouter:
     def __init__(self, modelo="openai/gpt-4.1-mini"):
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        api_key = obtener_api_key()
 
         if not api_key:
             raise ValueError(
