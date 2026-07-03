@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.streamlit/
+.venv/
+venv/
+.agents/
+.codex/
+.git_invalid_backup/
