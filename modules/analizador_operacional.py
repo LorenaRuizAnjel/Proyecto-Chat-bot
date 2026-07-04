@@ -1,11 +1,21 @@
+import re
+import unicodedata
+
+
 class AnalizadorOperacional:
     SINONIMOS = {
         "choferes": "conductores",
         "chofer": "conductor",
         "operarios": "conductores",
         "operario": "conductor",
+        "operadores": "conductores",
+        "operador": "conductor",
+        "trabajadores": "conductores",
+        "trabajador": "conductor",
         "pilotos": "conductores",
         "piloto": "conductor",
+        "camioneros": "conductores",
+        "camionero": "conductor",
         "conductora": "conductor",
         "conductoras": "conductores",
     }
@@ -137,8 +147,18 @@ class AnalizadorOperacional:
         return any(palabra in pregunta for palabra in palabras)
 
     def _normalizar_pregunta(self, pregunta):
-        pregunta_normalizada = pregunta.lower().strip()
+        pregunta_normalizada = self._normalizar_texto(pregunta)
         for sinonimo, canonico in self.SINONIMOS.items():
-            pregunta_normalizada = pregunta_normalizada.replace(sinonimo, canonico)
+            pregunta_normalizada = re.sub(
+                rf"\b{re.escape(sinonimo)}\b",
+                canonico,
+                pregunta_normalizada,
+            )
 
         return pregunta_normalizada
+
+    def _normalizar_texto(self, texto):
+        texto = "" if texto is None else str(texto).lower()
+        texto = unicodedata.normalize("NFKD", texto)
+        texto = "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
+        return re.sub(r"\s+", " ", texto).strip()

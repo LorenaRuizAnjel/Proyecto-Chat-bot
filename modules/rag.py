@@ -172,6 +172,10 @@ class SemanticRAG:
         "choferes": ["conductor", "conductores"],
         "operario": ["conductor", "conductores"],
         "operarios": ["conductor", "conductores"],
+        "operador": ["conductor", "conductores"],
+        "operadores": ["conductor", "conductores"],
+        "trabajador": ["conductor", "conductores"],
+        "trabajadores": ["conductor", "conductores"],
         "piloto": ["conductor", "conductores"],
         "pilotos": ["conductor", "conductores"],
         "conductora": ["conductor", "conductores"],
@@ -196,6 +200,10 @@ class SemanticRAG:
                 "choferes",
                 "operario",
                 "operarios",
+                "operador",
+                "operadores",
+                "trabajador",
+                "trabajadores",
                 "piloto",
                 "pilotos",
                 "camionero",
@@ -254,7 +262,7 @@ class SemanticRAG:
         mantenciones=None,
         documentos=None,
         model_name="paraphrase-multilingual-MiniLM-L12-v2",
-        candidate_k=30,
+        candidate_k=120,
         min_score=0.12,
     ):
         self.viajes = viajes
@@ -480,12 +488,11 @@ class SemanticRAG:
             convert_to_numpy=True,
             normalize_embeddings=True,
         )
-        n_candidatos = min(self.candidate_k, len(self.docs_df))
-        distancias, indices = self.index.kneighbors(q_emb, n_neighbors=n_candidatos)
+        indices, distancias = self._recuperar_indices(q_emb, intencion)
         tokens_pregunta = self._tokens(pregunta_expandida)
 
         candidatos = []
-        for distancia, indice in zip(distancias[0], indices[0]):
+        for distancia, indice in zip(distancias, indices):
             fila = self.docs_df.iloc[indice]
             semantic_score = max(0.0, 1.0 - float(distancia))
             lexical_score = self._score_lexico(tokens_pregunta, fila["tokens"])
@@ -568,6 +575,28 @@ class SemanticRAG:
 
         coincidencias = tokens_pregunta & tokens_documento
         return len(coincidencias) / len(tokens_pregunta)
+
+    def _recuperar_indices(self, q_emb, intencion):
+        n_candidatos = min(self.candidate_k, len(self.docs_df))
+
+        if not intencion:
+            distancias, indices = self.index.kneighbors(q_emb, n_neighbors=n_candidatos)
+            return indices[0], distancias[0]
+
+        permitidos = self.INTENCIONES[intencion]["permitidos"]
+        mascara = self.docs_df["tipo"].isin(permitidos).to_numpy()
+        indices_permitidos = np.flatnonzero(mascara)
+
+        if len(indices_permitidos) == 0:
+            distancias, indices = self.index.kneighbors(q_emb, n_neighbors=n_candidatos)
+            return indices[0], distancias[0]
+
+        embeddings_filtrados = self.embeddings[indices_permitidos]
+        similitudes = embeddings_filtrados @ q_emb[0]
+        orden = np.argsort(-similitudes)[: min(n_candidatos, len(indices_permitidos))]
+        indices = indices_permitidos[orden]
+        distancias = 1.0 - similitudes[orden]
+        return indices, distancias
 
     def _score_menciones(self, pregunta, meta):
         if not isinstance(meta, dict):
