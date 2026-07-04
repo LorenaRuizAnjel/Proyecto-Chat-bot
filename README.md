@@ -17,12 +17,25 @@ Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transport
 - RAG semantico con embeddings multilingues, fragmentos de documentos, agregados de negocio y ranking semantico/lexico.
 - Historial de conversacion durante la sesion.
 
+## RAG semantico avanzado
+
+El proyecto conserva el RAG simple como respaldo, pero las preguntas abiertas usan `SemanticRAG` cuando las dependencias de embeddings estan disponibles.
+
+El recuperador semantico:
+
+- Usa embeddings multilingues con `paraphrase-multilingual-MiniLM-L12-v2`.
+- Fragmenta documentos largos de `documentos_rag`.
+- Indexa viajes, mantenciones y documentos en un corpus unificado.
+- Agrega resumenes de negocio por centro, ruta, conductor, fuente, patente y tipo de mantencion.
+- Reordena resultados con una mezcla de similitud semantica, coincidencias lexicas y menciones exactas.
+- Si faltan `sentence-transformers` o `scikit-learn` en el entorno de ejecucion, la app muestra un aviso y usa el RAG simple para no romper la interfaz.
+
 ## Estructura
 
 - `app.py`: interfaz principal en Streamlit.
 - `modules/lector_sql.py`: lectura del dump, compatibilidad SQLite y normalizacion de tablas.
 - `modules/analizador_operacional.py`: metricas y respuestas calculadas.
-- `modules/rag.py`: seleccion de contexto relevante para viajes, mantenciones y documentos RAG.
+- `modules/rag.py`: RAG simple y RAG semantico hibrido para recuperar contexto relevante.
 - `modules/chatbot_openrouter.py`: cliente de OpenRouter.
 - `data/base_datos_chatbot_rag_transportes.sql`: base principal del chatbot.
 - `data/administracion.xlsx`: facturas, gastos y KPIs administrativos.
@@ -46,6 +59,12 @@ OPENROUTER_API_KEY=tu_api_key_aqui
 
 ```bash
 streamlit run app.py
+```
+
+En Windows, si tienes problemas de dependencias, ejecuta Streamlit usando explicitamente el Python del entorno virtual:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
 La primera consulta abierta puede tardar mas porque `sentence-transformers` descarga y cachea el modelo de embeddings. Las siguientes consultas reutilizan el indice con `st.cache_resource`.
