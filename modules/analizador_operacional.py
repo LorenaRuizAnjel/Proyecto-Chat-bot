@@ -1,4 +1,15 @@
 class AnalizadorOperacional:
+    SINONIMOS = {
+        "choferes": "conductores",
+        "chofer": "conductor",
+        "operarios": "conductores",
+        "operario": "conductor",
+        "pilotos": "conductores",
+        "piloto": "conductor",
+        "conductora": "conductor",
+        "conductoras": "conductores",
+    }
+
     def __init__(self, viajes, mantenciones=None):
         self.viajes = viajes
         self.mantenciones = mantenciones
@@ -23,7 +34,7 @@ class AnalizadorOperacional:
         }
 
     def generar_respuesta_calculada(self, pregunta):
-        pregunta_normalizada = pregunta.lower().strip()
+        pregunta_normalizada = self._normalizar_pregunta(pregunta)
 
         if not pregunta_normalizada:
             return None
@@ -124,3 +135,10 @@ class AnalizadorOperacional:
 
     def _menciona(self, pregunta, palabras):
         return any(palabra in pregunta for palabra in palabras)
+
+    def _normalizar_pregunta(self, pregunta):
+        pregunta_normalizada = pregunta.lower().strip()
+        for sinonimo, canonico in self.SINONIMOS.items():
+            pregunta_normalizada = pregunta_normalizada.replace(sinonimo, canonico)
+
+        return pregunta_normalizada

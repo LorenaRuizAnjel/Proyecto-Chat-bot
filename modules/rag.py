@@ -167,6 +167,87 @@ class SemanticRAG:
         "entre",
     }
 
+    SINONIMOS_DOMINIO = {
+        "chofer": ["conductor", "conductores"],
+        "choferes": ["conductor", "conductores"],
+        "operario": ["conductor", "conductores"],
+        "operarios": ["conductor", "conductores"],
+        "piloto": ["conductor", "conductores"],
+        "pilotos": ["conductor", "conductores"],
+        "conductora": ["conductor", "conductores"],
+        "conductoras": ["conductor", "conductores"],
+        "camionero": ["conductor", "conductores"],
+        "camioneros": ["conductor", "conductores"],
+        "flete": ["tarifa", "ingreso", "ingreso neto"],
+        "venta": ["ingreso", "ingreso neto"],
+        "ventas": ["ingreso", "ingreso neto"],
+        "mantenimiento": ["mantencion", "mantenciones"],
+        "mantenimientos": ["mantencion", "mantenciones"],
+        "equipo": ["patente", "tracto", "rampla"],
+        "equipos": ["patente", "tracto", "rampla"],
+    }
+
+    INTENCIONES = {
+        "conductor": {
+            "terminos": {
+                "conductor",
+                "conductores",
+                "chofer",
+                "choferes",
+                "operario",
+                "operarios",
+                "piloto",
+                "pilotos",
+                "camionero",
+                "camioneros",
+            },
+            "preferidos": {"viaje", "resumen_viajes_conductor"},
+            "permitidos": {"viaje", "resumen_viajes_conductor", "documento"},
+            "penalizados": {
+                "resumen_viajes_centro",
+                "resumen_viajes_ruta",
+                "resumen_viajes_fuente",
+                "resumen_viajes_tracto",
+                "mantencion",
+                "resumen_mantenciones_patente",
+                "resumen_mantenciones_tipo_mantencion",
+                "resumen_mantenciones_motivo",
+            },
+        },
+        "mantencion": {
+            "terminos": {
+                "mantencion",
+                "mantenciones",
+                "mantenimiento",
+                "mantenimientos",
+                "repuesto",
+                "repuestos",
+                "mano",
+                "obra",
+                "patente",
+            },
+            "preferidos": {
+                "mantencion",
+                "resumen_mantenciones_patente",
+                "resumen_mantenciones_tipo_mantencion",
+                "resumen_mantenciones_motivo",
+            },
+            "permitidos": {
+                "mantencion",
+                "resumen_mantenciones_patente",
+                "resumen_mantenciones_tipo_mantencion",
+                "resumen_mantenciones_motivo",
+                "documento",
+            },
+            "penalizados": {
+                "resumen_viajes_centro",
+                "resumen_viajes_ruta",
+                "resumen_viajes_conductor",
+                "resumen_viajes_fuente",
+            },
+        },
+    }
+
     def __init__(
         self,
         viajes=None,
@@ -390,38 +471,50 @@ class SemanticRAG:
         if not pregunta:
             return "No hay pregunta disponible para construir contexto semantico."
 
+        pregunta_expandida = self._expandir_pregunta(pregunta)
+        intencion = self._detectar_intencion(pregunta_expandida)
+
         q_emb = self.model.encode(
-            [pregunta],
+            [pregunta_expandida],
             show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=True,
         )
         n_candidatos = min(self.candidate_k, len(self.docs_df))
         distancias, indices = self.index.kneighbors(q_emb, n_neighbors=n_candidatos)
-        tokens_pregunta = self._tokens(pregunta)
+        tokens_pregunta = self._tokens(pregunta_expandida)
 
         candidatos = []
         for distancia, indice in zip(distancias[0], indices[0]):
             fila = self.docs_df.iloc[indice]
             semantic_score = max(0.0, 1.0 - float(distancia))
             lexical_score = self._score_lexico(tokens_pregunta, fila["tokens"])
-            exact_score = self._score_menciones(pregunta, fila["meta"])
-            final_score = (semantic_score * 0.75) + (lexical_score * 0.15) + (exact_score * 0.10)
+            exact_score = self._score_menciones(pregunta_expandida, fila["meta"])
+            intent_score = self._score_intencion(intencion, fila)
+            final_score = (
+                (semantic_score * 0.60)
+                + (lexical_score * 0.20)
+                + (exact_score * 0.10)
+                + (intent_score * 0.10)
+            )
+
+            if self._fuera_de_intencion(intencion, fila):
+                final_score *= 0.35
 
             if final_score >= self.min_score:
-                candidatos.append((final_score, semantic_score, lexical_score, fila))
+                candidatos.append((final_score, semantic_score, lexical_score, intent_score, fila))
 
         if not candidatos:
             return "No encontre contexto suficientemente relevante en los datos disponibles."
 
         candidatos.sort(key=lambda item: item[0], reverse=True)
         piezas = []
-        for final_score, semantic_score, lexical_score, fila in candidatos[:top_k]:
+        for final_score, semantic_score, lexical_score, intent_score, fila in candidatos[:top_k]:
             meta = fila["meta"] if isinstance(fila["meta"], dict) else {}
             meta_text = ", ".join(f"{k}={v}" for k, v in meta.items() if pd.notna(v) and v != "")
             encabezado = (
                 f"Fuente: {fila['tipo']} | Relevancia: {final_score:.2f} "
-                f"(semantica {semantic_score:.2f}, lexica {lexical_score:.2f})"
+                f"(semantica {semantic_score:.2f}, lexica {lexical_score:.2f}, intencion {intent_score:.2f})"
             )
             if meta_text:
                 encabezado += f" | {meta_text}"
@@ -487,6 +580,50 @@ class SemanticRAG:
 
         pregunta_normalizada = self._normalizar(pregunta)
         return 1.0 if any(valor in pregunta_normalizada for valor in valores) else 0.0
+
+    def _expandir_pregunta(self, pregunta):
+        pregunta_normalizada = self._normalizar(pregunta)
+        agregados = []
+
+        for termino, sinonimos in self.SINONIMOS_DOMINIO.items():
+            if re.search(rf"\b{re.escape(termino)}\b", pregunta_normalizada):
+                agregados.extend(sinonimos)
+
+        if not agregados:
+            return pregunta
+
+        return f"{pregunta} {' '.join(sorted(set(agregados)))}"
+
+    def _detectar_intencion(self, pregunta):
+        tokens = self._tokens(pregunta)
+        for nombre, configuracion in self.INTENCIONES.items():
+            if tokens & configuracion["terminos"]:
+                return nombre
+
+        return None
+
+    def _score_intencion(self, intencion, fila):
+        if not intencion:
+            return 0.0
+
+        tipo = fila["tipo"]
+        configuracion = self.INTENCIONES[intencion]
+        if tipo in configuracion["preferidos"]:
+            return 1.0
+        if tipo in configuracion["permitidos"]:
+            return 0.35
+        if tipo in configuracion["penalizados"]:
+            return -0.50
+
+        return 0.0
+
+    def _fuera_de_intencion(self, intencion, fila):
+        if not intencion:
+            return False
+
+        tipo = fila["tipo"]
+        configuracion = self.INTENCIONES[intencion]
+        return tipo not in configuracion["permitidos"] and tipo in configuracion["penalizados"]
 
     def _tokens(self, texto):
         texto = self._normalizar(texto)

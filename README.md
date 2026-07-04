@@ -28,6 +28,7 @@ El recuperador semantico:
 - Indexa viajes, mantenciones y documentos en un corpus unificado.
 - Agrega resumenes de negocio por centro, ruta, conductor, fuente, patente y tipo de mantencion.
 - Reordena resultados con una mezcla de similitud semantica, coincidencias lexicas y menciones exactas.
+- Normaliza vocabulario operacional: por ejemplo `chofer`, `operario`, `piloto` y `camionero` se interpretan como `conductor`.
 - Si faltan `sentence-transformers` o `scikit-learn` en el entorno de ejecucion, la app muestra un aviso y usa el RAG simple para no romper la interfaz.
 
 ## Estructura
