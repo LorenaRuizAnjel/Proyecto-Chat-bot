@@ -1,4 +1,7 @@
 from pathlib import Path
+import logging
+import re
+import unicodedata
 
 import altair as alt
 import pandas as pd
@@ -6,17 +9,25 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from modules.analizador_operacional import AnalizadorOperacional
-from modules.chatbot_openrouter import ChatbotOpenRouter
+from modules.chatbot_openrouter import (
+    MODELO_OPENROUTER,
+    ChatbotOpenRouter,
+    ErrorModeloExterno,
+)
 from modules.lector_administracion import LectorAdministracion
+from modules.lector_pdf import LectorPDF
 from modules.lector_sql import LectorSQL
 from modules.rag import RAG, SemanticRAG
 
 
 RUTA_SQL = "data/base_datos_chatbot_rag_transportes.sql"
 RUTA_ADMINISTRACION = "data/administracion.xlsx"
+RUTA_PDFS = "data"
 
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 st.set_page_config(
@@ -36,6 +47,24 @@ def cargar_base(_ultima_modificacion):
 def cargar_administracion(_ultima_modificacion):
     lector = LectorAdministracion(RUTA_ADMINISTRACION)
     return lector.cargar_datos()
+
+
+@st.cache_data(show_spinner=False)
+def cargar_documentos_pdf(_ultima_modificacion):
+    lector = LectorPDF(RUTA_PDFS)
+    return lector.cargar_datos()
+
+
+def obtener_marca_modificacion_pdfs():
+    carpeta = Path(RUTA_PDFS)
+    if not carpeta.exists():
+        return "sin-carpeta"
+
+    marcas = [
+        f"{archivo.name}:{archivo.stat().st_size}:{archivo.stat().st_mtime}"
+        for archivo in sorted(carpeta.glob("*.pdf"))
+    ]
+    return "|".join(marcas) if marcas else "sin-pdf"
 
 
 def aplicar_filtros_viajes(viajes):
@@ -128,21 +157,68 @@ def aplicar_filtros_mantenciones(mantenciones):
     if tipos:
         filtradas = filtradas[filtradas["Tipo Mantencion"].isin(tipos)]
 
+    filtradas.attrs["filtros_mantenciones_activos"] = bool(patentes or tipos)
     return filtradas
 
 
-def mostrar_kpis(kpis):
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Viajes", f"{kpis['viajes']:.0f}")
-    col2.metric("Ingreso neto", f"${kpis['ingreso_neto']:,.0f}")
-    col3.metric("Mantenciones", f"{kpis['mantenciones']:.0f}")
-    col4.metric("Costo mantenciones", f"${kpis['costo_mantenciones']:,.0f}")
+def calcular_kpis_viajes(viajes):
+    viajes_vacios = viajes is None or viajes.empty
+    ingreso_neto = 0 if viajes_vacios else float(viajes["Ingreso Neto"].sum())
 
-    col5, col6, col7, col8 = st.columns(4)
-    col5.metric("Resultado neto", f"${kpis['resultado_neto']:,.0f}")
-    col6.metric("Guias", f"{kpis['guias']:,.0f}")
-    col7.metric("Fuentes viajes", f"{kpis['fuentes_viajes']:.0f}")
-    col8.metric("Costo total", f"${kpis['costo_total']:,.0f}")
+    return {
+        "viajes": 0 if viajes_vacios else int(len(viajes)),
+        "ingreso_neto": ingreso_neto,
+        "guias": 0 if viajes_vacios else int(viajes["Cantidad Guias"].sum()),
+        "fuentes_viajes": 0 if viajes_vacios else int(viajes["Fuente"].nunique()),
+    }
+
+
+def calcular_kpis_flota(mantenciones):
+    mantenciones_vacias = mantenciones is None or mantenciones.empty
+    cantidad = 0 if mantenciones_vacias else int(len(mantenciones))
+    costo_total = 0 if mantenciones_vacias else float(mantenciones["Costo Total"].sum())
+    costo_promedio = costo_total / cantidad if cantidad else 0
+    vehiculos = 0 if mantenciones_vacias else int(mantenciones["Patente"].nunique())
+
+    return {
+        "mantenciones": cantidad,
+        "costo_mantenciones": costo_total,
+        "costo_promedio_mantencion": costo_promedio,
+        "vehiculos_con_mantencion": vehiculos,
+    }
+
+
+def mostrar_kpis(kpis_viajes, kpis_flota, filtros_mantenciones_activos=False):
+    resultado_neto_estimado = kpis_viajes["ingreso_neto"] - kpis_flota["costo_mantenciones"]
+
+    st.subheader("Indicadores según filtros de viajes")
+    st.caption("Estos indicadores cambian según los filtros de viajes seleccionados.")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Viajes", f"{kpis_viajes['viajes']:.0f}")
+    col2.metric("Ingreso neto", f"${kpis_viajes['ingreso_neto']:,.0f}")
+    col3.metric("Resultado neto estimado", f"${resultado_neto_estimado:,.0f}")
+    col4.metric("Guias", f"{kpis_viajes['guias']:,.0f}")
+    col5.metric("Fuentes viajes", f"{kpis_viajes['fuentes_viajes']:.0f}")
+
+    st.caption("Resultado neto estimado: ingreso neto menos costo de mantenciones visibles.")
+
+    st.subheader("Indicadores generales de flota")
+    if filtros_mantenciones_activos:
+        st.caption(
+            "Estos indicadores corresponden a mantenciones de la flota filtradas por patente o tipo de mantencion; "
+            "no se atribuyen directamente al conductor seleccionado."
+        )
+    else:
+        st.caption(
+            "Estos indicadores corresponden a mantenciones de la flota y no se atribuyen directamente al conductor seleccionado."
+        )
+
+    col6, col7, col8, col9 = st.columns(4)
+    col6.metric("Mantenciones totales", f"{kpis_flota['mantenciones']:.0f}")
+    col7.metric("Costo mantenciones flota", f"${kpis_flota['costo_mantenciones']:,.0f}")
+    col8.metric("Costo promedio por mantencion", f"${kpis_flota['costo_promedio_mantencion']:,.0f}")
+    col9.metric("Vehiculos/patentes con mantencion", f"{kpis_flota['vehiculos_con_mantencion']:.0f}")
 
 
 def formato_pesos(valor):
@@ -722,27 +798,427 @@ def mostrar_graficos_ingresos(viajes):
     st.dataframe(detalle_conductor, width="stretch")
 
 
-def responder_pregunta(pregunta, viajes, mantenciones, documentos):
+def normalizar_texto_intencion(texto):
+    texto = str(texto).lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    return texto.strip()
+
+
+def clasificar_intencion(pregunta):
+    pregunta_normalizada = normalizar_texto_intencion(pregunta)
+
+    if not pregunta_normalizada:
+        return "documental"
+
+    patrones_documentales = [
+        "plan",
+        "manual",
+        "politica",
+        "procedimiento",
+        "procedimientos",
+        "protocolo",
+        "protocolos",
+        "definicion",
+        "definir",
+        "regla",
+        "reglas",
+        "instruccion",
+        "instrucciones",
+        "explicacion",
+        "explica",
+        "explique",
+        "que dice",
+        "como se debe",
+        "cada cuanto",
+        "que debe",
+        "que deben",
+        "que se revisa",
+        "que revisar",
+        "antes de salir",
+        "emergencia",
+    ]
+    patrones_analiticos = [
+        "ranking",
+        "rank",
+        "total",
+        "totales",
+        "monto",
+        "montos",
+        "costo",
+        "costos",
+        "ingreso",
+        "ingresos",
+        "mayor",
+        "mayores",
+        "menor",
+        "menores",
+        "promedio",
+        "suma",
+        "cuanto",
+        "cuantos",
+        "cuantas",
+        "gastado",
+        "gasto",
+        "gastos",
+        "factura",
+        "facturas",
+        "conductor",
+        "conductores",
+        "chofer",
+        "choferes",
+        "operador",
+        "operadores",
+        "patente",
+        "patentes",
+        "vehiculo",
+        "vehiculos",
+        "camion",
+        "camiones",
+        "tracto",
+        "rampla",
+        "comparacion",
+        "compara",
+    ]
+
+    if any(patron in pregunta_normalizada for patron in patrones_documentales):
+        return "documental"
+
+    if any(patron in pregunta_normalizada for patron in patrones_analiticos):
+        return "analitica"
+
+    return "documental"
+
+
+def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None):
+    intencion_semantica = clasificar_intencion_semantica(pregunta)
+
+    if intencion_semantica:
+        logger.info("Intencion detectada por Gemini: %s", intencion_semantica)
+        st.caption(
+            "Intención detectada: "
+            f"{intencion_semantica['tipo']} / {intencion_semantica['accion']} / "
+            f"{intencion_semantica['metrica']} / {intencion_semantica['entidad']}"
+        )
+
+        if intencion_semantica["tipo"] == "analitica":
+            return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, intencion_semantica)
+
+        if intencion_semantica["tipo"] == "documental":
+            return responder_documental(pregunta, documentos)
+
+    intencion = clasificar_intencion(pregunta)
+
+    if intencion == "analitica":
+        return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos)
+
+    return responder_documental(pregunta, documentos)
+
+
+def clasificar_intencion_semantica(pregunta):
+    try:
+        chatbot = ChatbotOpenRouter()
+        return chatbot.clasificar_intencion(pregunta)
+    except Exception as error:
+        logger.warning("No se pudo clasificar semanticamente la pregunta. Se usara fallback local: %s", error)
+        return None
+
+
+def mostrar_error_modelo_externo(error):
+    causa = error.__cause__
+    tipo_error = type(causa).__name__ if causa is not None else type(error).__name__
+
+    st.error(error.mensaje_usuario)
+    with st.expander("Detalle técnico de OpenRouter", expanded=True):
+        st.code(
+            "\n".join(
+                [
+                    "Proveedor: OpenRouter",
+                    f"Modelo: {MODELO_OPENROUTER}",
+                    f"Tipo de error: {tipo_error}",
+                    f"Detalle: {error.detalle}",
+                ]
+            ),
+            language="text",
+        )
+
+
+def responder_documental(pregunta, documentos=None):
+    if documentos is None:
+        documentos = globals().get("documentos", pd.DataFrame())
+
+    documentos_pdf = filtrar_documentos_pdf(documentos)
+    contexto = RAG(None, None, documentos_pdf).obtener_contexto(pregunta)
+
+    try:
+        chatbot = ChatbotOpenRouter()
+        return chatbot.preguntar(pregunta, contexto)
+
+    except ErrorModeloExterno as error:
+        logger.exception("Error al conectar con el modelo externo: %s", error.detalle)
+        mostrar_error_modelo_externo(error)
+        respuesta_documentos = responder_con_documentos_locales(pregunta, documentos_pdf)
+        if respuesta_documentos:
+            return (
+                "No fue posible conectar con el modelo externo. "
+                "Se muestran los fragmentos más relevantes encontrados en los documentos.\n\n"
+                f"{respuesta_documentos}"
+            )
+
+        return (
+            "No fue posible conectar con el modelo externo. "
+            "Se muestran los fragmentos más relevantes encontrados en los documentos.\n\n"
+            "No encontré información relevante en los documentos cargados."
+        )
+
+
+def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None, gastos=None, intencion=None):
+    if viajes is None:
+        viajes = globals().get("viajes_filtrados", pd.DataFrame())
+    if mantenciones is None:
+        mantenciones = globals().get("mantenciones_filtradas", pd.DataFrame())
+    if facturas is None:
+        facturas = globals().get("facturas", pd.DataFrame())
+    if gastos is None:
+        gastos = globals().get("gastos", pd.DataFrame())
+
     analizador = AnalizadorOperacional(viajes, mantenciones)
-    respuesta_calculada = analizador.generar_respuesta_calculada(pregunta)
+    respuesta_calculada = analizador.generar_respuesta_calculada(pregunta, intencion)
 
     if respuesta_calculada:
         return respuesta_calculada
 
-    @st.cache_resource(show_spinner=False)
-    def construir_rag(viajes, mantenciones, documentos):
-        try:
-            return SemanticRAG(viajes, mantenciones, documentos)
-        except ModuleNotFoundError as error:
-            st.warning(
-                f"{error}. Se usara el RAG simple para esta sesion."
-            )
-            return RAG(viajes, mantenciones, documentos)
+    respuesta_administrativa = responder_analitica_administrativa(pregunta, facturas, gastos)
+    if respuesta_administrativa:
+        return respuesta_administrativa
 
-    rag = construir_rag(viajes, mantenciones, documentos)
-    contexto = rag.obtener_contexto(pregunta)
-    chatbot = ChatbotOpenRouter()
-    return chatbot.preguntar(pregunta, contexto)
+    @st.cache_resource(show_spinner=False)
+    def construir_rag(viajes, mantenciones):
+        try:
+            return SemanticRAG(viajes, mantenciones, None)
+        except ModuleNotFoundError as error:
+            st.warning(f"{error}. Se usara el RAG simple para esta sesion.")
+            return RAG(viajes, mantenciones, None)
+
+    contexto = construir_rag(viajes, mantenciones).obtener_contexto(pregunta)
+
+    try:
+        chatbot = ChatbotOpenRouter()
+        return chatbot.preguntar(pregunta, contexto)
+    except ErrorModeloExterno as error:
+        logger.exception("Error al conectar con el modelo externo: %s", error.detalle)
+        mostrar_error_modelo_externo(error)
+        return (
+            "La consulta fue clasificada como analitica, pero no encontre un calculo directo "
+            "para responderla con los DataFrames disponibles. Ademas, no pude conectar con "
+            "el modelo externo para interpretar el contexto tabular."
+        )
+
+
+def responder_analitica_administrativa(pregunta, facturas=None, gastos=None):
+    pregunta_normalizada = normalizar_texto_intencion(pregunta)
+
+    if facturas is not None and not facturas.empty and "factura" in pregunta_normalizada:
+        facturas_datos = facturas.copy()
+        facturas_datos["Estado"] = facturas_datos["Estado"].fillna("").astype(str)
+
+        if "pendiente" in pregunta_normalizada:
+            pendientes = facturas_datos[facturas_datos["Estado"].str.lower() == "pendiente"]
+            monto = float(pendientes["Monto_Total"].sum()) if "Monto_Total" in pendientes.columns else 0
+            return (
+                "Facturas pendientes:\n"
+                f"- Cantidad: {len(pendientes):,.0f}\n"
+                f"- Monto total pendiente: ${monto:,.0f}"
+            )
+
+        return f"Facturas registradas: {len(facturas_datos):,.0f}"
+
+    if gastos is not None and not gastos.empty and any(palabra in pregunta_normalizada for palabra in ["gasto", "gastos", "combustible"]):
+        gastos_datos = gastos.copy()
+        gastos_datos["Categoria"] = gastos_datos["Categoria"].fillna("").astype(str)
+        gastos_datos["Descripcion"] = gastos_datos["Descripcion"].fillna("").astype(str)
+
+        if "combustible" in pregunta_normalizada:
+            mascara = (
+                gastos_datos["Categoria"].str.lower().str.contains("combustible", na=False)
+                | gastos_datos["Descripcion"].str.lower().str.contains("combustible", na=False)
+            )
+            gastos_datos = gastos_datos[mascara]
+
+        monto = float(gastos_datos["Monto"].sum()) if "Monto" in gastos_datos.columns else 0
+        return (
+            "Gastos registrados:\n"
+            f"- Cantidad: {len(gastos_datos):,.0f}\n"
+            f"- Monto total: ${monto:,.0f}"
+        )
+
+    return None
+
+
+def filtrar_documentos_pdf(documentos):
+    if documentos is None or documentos.empty:
+        return pd.DataFrame(columns=["Tipo Documento", "Referencia Tabla", "Referencia ID", "Contenido"])
+
+    if "Tipo Documento" not in documentos.columns:
+        return documentos
+
+    documentos_pdf = documentos[documentos["Tipo Documento"].fillna("").astype(str).str.upper() == "PDF"].copy()
+
+    if documentos_pdf.empty:
+        return documentos
+
+    return documentos_pdf
+
+
+def responder_con_documentos_locales(pregunta, documentos):
+    if documentos is None or documentos.empty:
+        return None
+
+    palabras = [palabra for palabra in normalizar_texto_intencion(pregunta).split() if len(palabra) > 3]
+    if not palabras:
+        return None
+
+    datos = documentos.copy()
+    datos["Referencia Tabla"] = datos["Referencia Tabla"].fillna("").astype(str)
+    datos["Referencia ID"] = datos["Referencia ID"].fillna("").astype(str)
+    datos["Contenido"] = datos["Contenido"].fillna("").astype(str)
+    datos["_titulo_busqueda"] = datos.apply(texto_titulo_documento, axis=1)
+    datos["_contenido_busqueda"] = datos["Contenido"].apply(normalizar_texto_intencion)
+    datos["_puntaje"] = datos.apply(lambda fila: puntuar_documento(palabras, fila), axis=1)
+    datos["_referencia_id_orden"] = datos["Referencia ID"].fillna("").astype(str)
+    datos = (
+        datos[datos["_puntaje"] > 0]
+        .sort_values(["_puntaje", "_referencia_id_orden"], ascending=[False, True])
+        .drop(columns="_referencia_id_orden")
+    )
+
+    if datos.empty:
+        return None
+
+    mejor_documento = datos.iloc[0]["Referencia Tabla"]
+    mejor_puntaje = datos.iloc[0]["_puntaje"]
+    datos_mejor_documento = datos[datos["Referencia Tabla"] == mejor_documento]
+
+    if mejor_puntaje >= 8:
+        datos = datos_mejor_documento
+
+    lineas = []
+    for _, fila in datos.head(3).iterrows():
+        referencia = str(fila["Referencia Tabla"]).replace("_", " ").title()
+        contenido = str(fila["Contenido"]).strip()
+        if len(contenido) > 500:
+            contenido = contenido[:500].rsplit(" ", 1)[0].rstrip() + "..."
+
+        lineas.append(f"- {referencia}: {contenido}")
+
+    return "\n".join(lineas)
+
+
+def texto_titulo_documento(fila):
+    partes = []
+    for columna in ["Referencia Tabla", "Referencia ID", "Archivo"]:
+        if columna in fila.index:
+            partes.append(str(fila.get(columna, "")))
+
+    return normalizar_texto_intencion(" ".join(partes).replace("_", " "))
+
+
+def puntuar_documento(palabras, fila):
+    titulo = fila["_titulo_busqueda"]
+    contenido = fila["_contenido_busqueda"]
+    puntaje = 0
+
+    for palabra in palabras:
+        if palabra in titulo:
+            puntaje += 6
+        if palabra in contenido:
+            puntaje += 1
+
+    frases = construir_frases_busqueda(palabras)
+    for frase in frases:
+        if frase in titulo:
+            puntaje += 18
+        if frase in contenido:
+            puntaje += 4
+
+    if all(palabra in titulo for palabra in palabras):
+        puntaje += 25
+
+    return puntaje
+
+
+def construir_frases_busqueda(palabras):
+    frases = []
+    for largo in range(min(4, len(palabras)), 1, -1):
+        for indice in range(0, len(palabras) - largo + 1):
+            frases.append(" ".join(palabras[indice : indice + largo]))
+
+    return frases
+
+
+def mostrar_documentos(documentos):
+    st.subheader("Documentos disponibles")
+
+    if documentos.empty:
+        st.info("No hay documentos disponibles.")
+        return
+
+    documentos_vista = documentos.copy()
+    documentos_vista["Referencia Tabla"] = documentos_vista["Referencia Tabla"].fillna("Sin referencia").astype(str)
+    documentos_vista["Contenido"] = documentos_vista["Contenido"].fillna("").astype(str)
+
+    busqueda = st.text_input("Buscar en documentos", placeholder="Ej: plan mantenimiento preventivo")
+    opciones = sorted(documentos_vista["Referencia Tabla"].unique())
+    seleccion = st.selectbox("Documento", ["Todos"] + opciones)
+
+    filtrados = documentos_vista.copy()
+
+    if seleccion != "Todos":
+        filtrados = filtrados[filtrados["Referencia Tabla"] == seleccion]
+
+    if busqueda.strip():
+        palabras = [palabra.lower() for palabra in busqueda.split() if len(palabra) > 2]
+        texto_busqueda = (
+            filtrados["Referencia Tabla"].str.lower()
+            + " "
+            + filtrados["Referencia ID"].fillna("").astype(str).str.lower()
+            + " "
+            + filtrados["Contenido"].str.lower()
+        )
+        mascara = texto_busqueda.apply(lambda texto: all(palabra in texto for palabra in palabras))
+        filtrados = filtrados[mascara]
+
+    if "Referencia ID" in filtrados.columns:
+        filtrados = (
+            filtrados.assign(_referencia_id_orden=filtrados["Referencia ID"].fillna("").astype(str))
+            .sort_values("_referencia_id_orden")
+            .drop(columns="_referencia_id_orden")
+        )
+
+    columnas = ["Tipo Documento", "Referencia Tabla", "Referencia ID", "Contenido"]
+    columnas = [columna for columna in columnas if columna in filtrados.columns]
+
+    st.dataframe(filtrados[columnas], width="stretch")
+
+    if filtrados.empty:
+        st.info("No hay documentos para la busqueda seleccionada.")
+        return
+
+    documento_actual = filtrados.iloc[0]
+    st.subheader(str(documento_actual["Referencia Tabla"]).replace("_", " ").title())
+    st.text_area("Contenido", documento_actual["Contenido"], height=280)
+
+    archivo = documento_actual.get("Archivo")
+    if isinstance(archivo, str) and archivo:
+        ruta_pdf = Path(RUTA_PDFS) / archivo
+        if ruta_pdf.exists():
+            st.download_button(
+                "Descargar PDF",
+                data=ruta_pdf.read_bytes(),
+                file_name=archivo,
+                mime="application/pdf",
+            )
 
 
 st.title("Chatbot Gerencial")
@@ -760,9 +1236,15 @@ except Exception as error:
     administracion = {"facturas": pd.DataFrame(), "gastos": pd.DataFrame(), "kpis": pd.DataFrame()}
     st.warning(f"No fue posible cargar administracion.xlsx. Detalle: {error}")
 
+try:
+    documentos_pdf = cargar_documentos_pdf(obtener_marca_modificacion_pdfs())
+except Exception as error:
+    documentos_pdf = pd.DataFrame()
+    st.warning(f"No fue posible cargar los PDF de data/. Detalle: {error}")
+
 viajes = base["viajes"]
 mantenciones = base["mantenciones"]
-documentos = base["documentos"]
+documentos = pd.concat([base["documentos"], documentos_pdf], ignore_index=True)
 facturas = administracion["facturas"]
 gastos = administracion["gastos"]
 kpis_administracion = administracion["kpis"]
@@ -779,7 +1261,13 @@ if viajes_filtrados.empty:
     st.stop()
 
 analizador = AnalizadorOperacional(viajes_filtrados, mantenciones_filtradas)
-mostrar_kpis(analizador.obtener_kpis())
+kpis_viajes = calcular_kpis_viajes(viajes_filtrados)
+kpis_flota = calcular_kpis_flota(mantenciones_filtradas)
+mostrar_kpis(
+    kpis_viajes,
+    kpis_flota,
+    mantenciones_filtradas.attrs.get("filtros_mantenciones_activos", False),
+)
 
 st.divider()
 
@@ -831,12 +1319,17 @@ with tab_chat:
                         viajes_filtrados,
                         mantenciones_filtradas,
                         documentos,
+                        facturas,
+                        gastos,
                     )
                     st.session_state.historial.append(
                         {"pregunta": consulta, "respuesta": respuesta}
                     )
                 except Exception as error:
+                    logger.exception("Error inesperado al generar la respuesta")
                     st.error(f"No se pudo generar la respuesta. Detalle: {error}")
+                    with st.expander("Detalle técnico del error", expanded=True):
+                        st.exception(error)
 
     for item in reversed(st.session_state.historial):
         with st.chat_message("user"):
@@ -862,5 +1355,4 @@ with tab_mantenciones:
     st.dataframe(mantenciones_filtradas, width="stretch")
 
 with tab_documentos:
-    st.subheader("Documentos RAG disponibles")
-    st.dataframe(documentos, width="stretch")
+    mostrar_documentos(documentos)

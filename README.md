@@ -9,11 +9,12 @@ Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transport
 - Une los viajes de `viajes_materiales_redes` y `viajes_cosecha` en una vista operacional.
 - Mantiene las mantenciones como un conjunto separado para KPIs, rankings y contexto RAG.
 - Usa `documentos_rag` como contexto adicional para preguntas abiertas.
+- Lee automaticamente los PDF ubicados en `data/` y los agrega al contexto RAG.
 - KPIs gerenciales: viajes, ingreso neto por tarifa flete, mantenciones, costo de mantenciones, resultado neto y guias.
 - La `Tarifa Flete` se considera ingreso neto cobrado al cliente por realizar el movimiento.
 - Los costos de mantencion se consideran egresos.
 - Respuestas calculadas con `pandas` para preguntas frecuentes de negocio.
-- Uso de OpenRouter para preguntas abiertas, con contexto recuperado por RAG semantico hibrido.
+- Uso de Gemini 2.5 Flash mediante OpenRouter para preguntas abiertas, con contexto recuperado por RAG semantico hibrido.
 - RAG semantico con embeddings multilingues, fragmentos de documentos, agregados de negocio y ranking semantico/lexico.
 - Historial de conversacion durante la sesion.
 
@@ -35,11 +36,13 @@ El recuperador semantico:
 
 - `app.py`: interfaz principal en Streamlit.
 - `modules/lector_sql.py`: lectura del dump, compatibilidad SQLite y normalizacion de tablas.
+- `modules/lector_pdf.py`: lectura de PDF en `data/` y preparacion en formato de documentos RAG.
 - `modules/analizador_operacional.py`: metricas y respuestas calculadas.
 - `modules/rag.py`: RAG simple y RAG semantico hibrido para recuperar contexto relevante.
-- `modules/chatbot_openrouter.py`: cliente de OpenRouter.
+- `modules/chatbot_openrouter.py`: cliente de OpenRouter configurado con `google/gemini-2.5-flash`.
 - `data/base_datos_chatbot_rag_transportes.sql`: base principal del chatbot.
 - `data/administracion.xlsx`: facturas, gastos y KPIs administrativos.
+- `data/*.pdf`: documentos usados como contexto adicional para el chatbot.
 
 ## Configuracion
 
@@ -55,6 +58,9 @@ pip install -r requirements.txt
 ```bash
 OPENROUTER_API_KEY=tu_api_key_aqui
 ```
+
+El proyecto usa el identificador `google/gemini-2.5-flash` de OpenRouter. No requiere
+una API key directa de Google Gemini.
 
 4. Ejecuta la app:
 

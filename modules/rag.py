@@ -23,7 +23,7 @@ class RAG:
         self.mantenciones = mantenciones
         self.documentos = documentos
 
-    def obtener_contexto(self, pregunta="", limite_filas=12):
+    def obtener_contexto(self, pregunta="", limite_filas=5):
         partes = []
 
         contexto_viajes = self._contexto_viajes(pregunta, limite_filas)
@@ -68,6 +68,8 @@ class RAG:
             "Orden Control",
             "Conductor",
             "Tipo Camion",
+            "Patente Tracto",
+            "Patente Rampla",
             "Ruta",
             "Cantidad Guias",
             "Ingreso Neto",
@@ -101,22 +103,113 @@ class RAG:
         datos_relevantes["Fecha"] = datos_relevantes["Fecha"].dt.strftime("%Y-%m-%d")
         return datos_relevantes.to_string(index=False)
 
-    def _contexto_documentos(self, pregunta, limite_filas):
+
+    def _contexto_documentos(self, pregunta, limite_filas=5):
         if self.documentos is None or self.documentos.empty:
             return ""
 
-        pregunta = pregunta.lower()
+        pregunta_normalizada = self._normalizar_texto(pregunta)
         documentos = self.documentos.copy()
 
-        if pregunta:
-            mascara = documentos["Contenido"].fillna("").str.lower().apply(
-                lambda contenido: any(palabra in contenido for palabra in pregunta.split() if len(palabra) > 3)
-            )
-            if mascara.any():
-                documentos = documentos[mascara]
+        if pregunta_normalizada:
+            palabras = [palabra for palabra in pregunta_normalizada.split() if len(palabra) > 3]
+
+            if palabras:
+                documentos["_texto_busqueda"] = documentos.apply(self._texto_documento_busqueda, axis=1)
+                documentos["_titulo_busqueda"] = documentos.apply(self._texto_documento_titulo, axis=1)
+                documentos["_puntaje"] = documentos.apply(
+                    lambda fila: self._puntuar_documento(palabras, fila),
+                    axis=1,
+                )
+
+                documentos = documentos[documentos["_puntaje"] > 0].copy()
+
+                if documentos.empty:
+                    return ""
+
+                documentos["_referencia_id_orden"] = documentos["Referencia ID"].fillna("").astype(str)
+                documentos = documentos.sort_values(
+                    ["_puntaje", "_referencia_id_orden"],
+                    ascending=[False, True],
+                )
 
         columnas = ["Tipo Documento", "Referencia Tabla", "Referencia ID", "Contenido"]
-        return documentos[columnas].head(limite_filas).to_string(index=False)
+        documentos = documentos[columnas].head(limite_filas).copy()
+
+        documentos["Contenido"] = documentos["Contenido"].fillna("").astype(str)
+        documentos["Contenido"] = documentos["Contenido"].apply(self._recortar_texto)
+
+        partes = []
+
+        for _, fila in documentos.iterrows():
+            partes.append(
+                f"Documento: {fila['Referencia Tabla']}\n"
+                f"Sección: {fila['Referencia ID']}\n"
+                f"Contenido: {fila['Contenido']}"
+            )
+
+        return "\n\n---\n\n".join(partes)
+
+    def _recortar_texto(self, texto, max_caracteres=1200):
+        texto = str(texto).strip()
+
+        if len(texto) <= max_caracteres:
+            return texto
+
+        return texto[:max_caracteres].rsplit(" ", 1)[0].rstrip() + "..."
+
+    def _texto_documento_busqueda(self, fila):
+        partes = []
+        for columna in ["Tipo Documento", "Referencia Tabla", "Referencia ID", "Archivo", "Contenido"]:
+            if columna in fila.index:
+                partes.append(str(fila.get(columna, "")))
+
+        return self._normalizar_texto(" ".join(partes).replace("_", " "))
+
+    def _texto_documento_titulo(self, fila):
+        partes = []
+        for columna in ["Referencia Tabla", "Referencia ID", "Archivo"]:
+            if columna in fila.index:
+                partes.append(str(fila.get(columna, "")))
+
+        return self._normalizar_texto(" ".join(partes).replace("_", " "))
+
+    def _puntuar_documento(self, palabras, fila):
+        titulo = fila["_titulo_busqueda"]
+        texto = fila["_texto_busqueda"]
+        puntaje = 0
+
+        for palabra in palabras:
+            if palabra in titulo:
+                puntaje += 6
+            if palabra in texto:
+                puntaje += 1
+
+        for frase in self._construir_frases_busqueda(palabras):
+            if frase in titulo:
+                puntaje += 18
+            if frase in texto:
+                puntaje += 4
+
+        if all(palabra in titulo for palabra in palabras):
+            puntaje += 25
+
+        return puntaje
+
+    def _construir_frases_busqueda(self, palabras):
+        frases = []
+        for largo in range(min(4, len(palabras)), 1, -1):
+            for indice in range(0, len(palabras) - largo + 1):
+                frases.append(" ".join(palabras[indice : indice + largo]))
+
+        return frases
+
+    def _normalizar_texto(self, texto):
+        texto = str(texto).lower()
+        texto = unicodedata.normalize("NFKD", texto)
+        texto = "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
+        texto = re.sub(r"[^a-z0-9]+", " ", texto)
+        return texto.strip()
 
     def _filtrar_por_menciones(self, datos, pregunta, columnas_busqueda):
         pregunta = pregunta.lower()
