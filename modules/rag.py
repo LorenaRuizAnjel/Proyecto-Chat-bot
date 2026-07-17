@@ -17,6 +17,49 @@ def cargar_dependencias_semanticas():
     return SentenceTransformer, NearestNeighbors
 
 
+def anexar_fuentes_documentales(respuesta, contexto):
+    """Anexa referencias verificables extraidas del contexto documental recuperado."""
+    referencias = []
+
+    patron_semantico = re.compile(
+        r"\barchivo=([^,\n|]+).*?\bpagina=([^,\n|]+)",
+        flags=re.IGNORECASE,
+    )
+    for archivo, pagina in patron_semantico.findall(str(contexto)):
+        referencia = f"{archivo.strip()}, pagina {pagina.strip()}"
+        if referencia not in referencias:
+            referencias.append(referencia)
+
+    patron_simple = re.compile(
+        r"Documento:\s*([^\n]+)\nSecci[oó]n:\s*([^\n]+)",
+        flags=re.IGNORECASE,
+    )
+    for documento, seccion in patron_simple.findall(str(contexto)):
+        pagina = re.search(r"-p(\d+)(?:-|$)", seccion, flags=re.IGNORECASE)
+        ubicacion = f"pagina {pagina.group(1)}" if pagina else f"seccion {seccion.strip()}"
+        referencia = f"{documento.strip()}, {ubicacion}"
+        if referencia not in referencias:
+            referencias.append(referencia)
+
+    if not referencias:
+        return respuesta
+
+    fuentes = "\n".join(f"- {referencia}" for referencia in referencias)
+    return f"{str(respuesta).rstrip()}\n\nFuentes documentales recuperadas:\n{fuentes}"
+
+
+def contexto_documental_insuficiente(contexto):
+    """Indica si el recuperador no entrego fragmentos aptos para responder."""
+    texto = re.sub(r"\s+", " ", str(contexto or "")).strip().lower()
+    mensajes_sin_contexto = (
+        "no hay datos disponibles",
+        "no hay pregunta disponible",
+        "no encontre contexto suficientemente relevante",
+        "no encontré contexto suficientemente relevante",
+    )
+    return not texto or any(texto.startswith(mensaje) for mensaje in mensajes_sin_contexto)
+
+
 class RAG:
     def __init__(self, viajes, mantenciones=None, documentos=None):
         self.viajes = viajes
@@ -231,7 +274,7 @@ class RAG:
 
 
 class SemanticRAG:
-    """RAG semantico hibrido para datos operacionales."""
+    """RAG semantico hibrido para datos operacionales y documentos."""
 
     STOPWORDS = {
         "sobre",
@@ -411,6 +454,9 @@ class SemanticRAG:
                 "tipo_documento": row.get("Tipo Documento"),
                 "referencia_tabla": row.get("Referencia Tabla"),
                 "referencia_id": row.get("Referencia ID"),
+                "archivo": row.get("Archivo"),
+                "pagina": row.get("Pagina"),
+                "fecha_actualizacion": row.get("Fecha Modificacion"),
             }
             titulo = self._titulo_desde_meta("Documento RAG", meta)
 

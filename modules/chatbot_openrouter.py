@@ -78,7 +78,11 @@ class ChatbotOpenRouter:
                             "Tarifa Flete es el ingreso neto cobrado al cliente por realizar el movimiento; "
                             "no lo trates como costo. Los costos de mantencion si son egresos. "
                             "Usa solo los datos entregados como contexto. "
-                            "Si la respuesta no se puede inferir desde el contexto, dilo claramente."
+                            "Si la respuesta no se puede inferir desde el contexto, dilo claramente. "
+                            "Cuando el contexto provenga de documentos, cita junto a cada afirmacion "
+                            "el nombre del archivo y la pagina con el formato [archivo.pdf, pagina N]. "
+                            "No inventes fuentes ni cites documentos que no aparezcan en el contexto. "
+                            "Entrega primero una respuesta directa y luego una seccion breve llamada Fuentes."
                         ),
                     },
                     {
@@ -121,6 +125,39 @@ class ChatbotOpenRouter:
             ) from error
 
         return respuesta.choices[0].message.content
+
+    def verificar_respaldo_documental(self, respuesta, contexto):
+        """Aprueba solo respuestas cuyas afirmaciones estan respaldadas por el contexto."""
+        try:
+            veredicto = self.cliente.chat.completions.create(
+                model=self.modelo,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres un verificador estricto de respuestas basadas en documentos. "
+                            "Revisa si TODAS las afirmaciones factuales de la respuesta se pueden inferir "
+                            "directamente del contexto. No uses conocimiento externo. "
+                            "Responde solo APROBADA o RECHAZADA. "
+                            "Rechaza si la respuesta agrega datos, fechas, reglas o conclusiones no respaldadas."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Contexto:\n{contexto}\n\nRespuesta a verificar:\n{respuesta}",
+                    },
+                ],
+                max_tokens=10,
+                temperature=0,
+            )
+        except Exception as error:
+            raise ErrorModeloExterno(
+                "No fue posible verificar que la respuesta este respaldada por los documentos.",
+                f"Error al verificar el respaldo documental: {error}",
+            ) from error
+
+        contenido = (veredicto.choices[0].message.content or "").strip().upper()
+        return bool(re.fullmatch(r"APROBADA[.!]?", contenido))
 
     def clasificar_intencion(self, pregunta):
         try:

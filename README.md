@@ -74,7 +74,7 @@ En Windows, si tienes problemas de dependencias, ejecuta Streamlit usando explic
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-La primera consulta abierta puede tardar mas porque `sentence-transformers` descarga y cachea el modelo de embeddings. Las siguientes consultas reutilizan el indice con `st.cache_resource`.
+La primera consulta abierta o documental puede tardar mas porque `sentence-transformers` descarga y cachea el modelo de embeddings. Las siguientes consultas reutilizan los indices con `st.cache_resource`.
 
 ## Publicacion en Streamlit Community Cloud
 

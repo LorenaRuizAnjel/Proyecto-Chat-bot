@@ -17,7 +17,12 @@ from modules.chatbot_openrouter import (
 from modules.lector_administracion import LectorAdministracion
 from modules.lector_pdf import LectorPDF
 from modules.lector_sql import LectorSQL
-from modules.rag import RAG, SemanticRAG
+from modules.rag import (
+    RAG,
+    SemanticRAG,
+    anexar_fuentes_documentales,
+    contexto_documental_insuficiente,
+)
 
 
 RUTA_SQL = "data/base_datos_chatbot_rag_transportes.sql"
@@ -892,6 +897,11 @@ def clasificar_intencion(pregunta):
 
 
 def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None):
+    respuesta_cantidad_pdf = responder_cantidad_pdf(pregunta, documentos)
+    if respuesta_cantidad_pdf:
+        st.caption("Intención detectada localmente: inventario de documentos PDF")
+        return respuesta_cantidad_pdf
+
     intencion_semantica = clasificar_intencion_semantica(pregunta)
 
     if intencion_semantica:
@@ -949,11 +959,34 @@ def responder_documental(pregunta, documentos=None):
         documentos = globals().get("documentos", pd.DataFrame())
 
     documentos_pdf = filtrar_documentos_pdf(documentos)
-    contexto = RAG(None, None, documentos_pdf).obtener_contexto(pregunta)
+
+    @st.cache_resource(show_spinner=False)
+    def construir_rag_documental(documentos_indexados):
+        return SemanticRAG(None, None, documentos_indexados)
+
+    try:
+        rag_documental = construir_rag_documental(documentos_pdf)
+    except ModuleNotFoundError as error:
+        st.warning(f"{error}. Se usara el RAG simple para esta sesion.")
+        rag_documental = RAG(None, None, documentos_pdf)
+
+    contexto = rag_documental.obtener_contexto(pregunta)
+
+    if contexto_documental_insuficiente(contexto):
+        return (
+            "No encontré esta información en los documentos disponibles. "
+            "Consulta con el área responsable si necesitas una confirmación oficial."
+        )
 
     try:
         chatbot = ChatbotOpenRouter()
-        return chatbot.preguntar(pregunta, contexto)
+        respuesta = chatbot.preguntar(pregunta, contexto)
+        if not chatbot.verificar_respaldo_documental(respuesta, contexto):
+            return (
+                "No puedo entregar una respuesta porque no fue posible respaldarla "
+                "de forma suficiente con los documentos recuperados."
+            )
+        return anexar_fuentes_documentales(respuesta, contexto)
 
     except ErrorModeloExterno as error:
         logger.exception("Error al conectar con el modelo externo: %s", error.detalle)
@@ -1056,6 +1089,47 @@ def responder_analitica_administrativa(pregunta, facturas=None, gastos=None):
     return None
 
 
+def responder_cantidad_pdf(pregunta, documentos):
+    pregunta_normalizada = normalizar_texto_intencion(pregunta)
+    consulta_cantidad = any(
+        termino in pregunta_normalizada
+        for termino in ["cuanto", "cuantos", "cantidad", "numero", "total"]
+    )
+    menciona_pdf = "pdf" in pregunta_normalizada
+
+    if not consulta_cantidad or not menciona_pdf:
+        return None
+
+    if documentos is None or documentos.empty:
+        documentos_pdf = pd.DataFrame()
+    elif "Tipo Documento" in documentos.columns:
+        mascara_pdf = documentos["Tipo Documento"].fillna("").astype(str).str.upper() == "PDF"
+        documentos_pdf = documentos[mascara_pdf].copy()
+    else:
+        documentos_pdf = filtrar_documentos_pdf(documentos)
+    if documentos_pdf.empty:
+        return "No hay archivos PDF cargados."
+
+    if "Archivo" in documentos_pdf.columns:
+        archivos = documentos_pdf["Archivo"].fillna("").astype(str).str.strip()
+        archivos = archivos[archivos != ""].drop_duplicates()
+    else:
+        archivos = pd.Series(dtype="object")
+
+    if archivos.empty and "Referencia Tabla" in documentos_pdf.columns:
+        archivos = (
+            documentos_pdf["Referencia Tabla"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        archivos = archivos[archivos != ""].drop_duplicates()
+
+    cantidad = len(archivos)
+    sustantivo = "archivo PDF" if cantidad == 1 else "archivos PDF"
+    return f"Hay {cantidad} {sustantivo} cargados."
+
+
 def filtrar_documentos_pdf(documentos):
     if documentos is None or documentos.empty:
         return pd.DataFrame(columns=["Tipo Documento", "Referencia Tabla", "Referencia ID", "Contenido"])
@@ -1110,7 +1184,16 @@ def responder_con_documentos_locales(pregunta, documentos):
         if len(contenido) > 500:
             contenido = contenido[:500].rsplit(" ", 1)[0].rstrip() + "..."
 
-        lineas.append(f"- {referencia}: {contenido}")
+        archivo = str(fila.get("Archivo", "") or "").strip()
+        pagina = fila.get("Pagina", "")
+        if archivo and pd.notna(pagina) and str(pagina).strip():
+            fuente = f"{archivo}, pagina {pagina}"
+        elif archivo:
+            fuente = archivo
+        else:
+            fuente = f"seccion {fila['Referencia ID']}"
+
+        lineas.append(f"- {referencia} [{fuente}]: {contenido}")
 
     return "\n".join(lineas)
 
