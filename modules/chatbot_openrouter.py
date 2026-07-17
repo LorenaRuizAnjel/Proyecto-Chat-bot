@@ -63,33 +63,48 @@ class ChatbotOpenRouter:
             timeout=TIMEOUT_OPENROUTER_SEGUNDOS,
         )
 
-    def preguntar(self, pregunta, contexto):
+    def preguntar(self, pregunta, contexto, historial=None):
+        mensajes = [
+            {
+                "role": "system",
+                "content": (
+                    "Eres un asistente gerencial para operaciones logisticas. "
+                    "Responde en espanol, de forma breve y ejecutiva. "
+                    "El contexto puede incluir viajes de materiales/redes, viajes de cosecha, "
+                    "mantenciones y documentos RAG. "
+                    "Tarifa Flete es el ingreso neto cobrado al cliente por realizar el movimiento; "
+                    "no lo trates como costo. Los costos de mantencion si son egresos. "
+                    "Usa solo los datos entregados como contexto. "
+                    "El historial sirve solo para comprender referencias de la conversacion; "
+                    "no lo uses como fuente de hechos. "
+                    "Si la respuesta no se puede inferir desde el contexto, dilo claramente. "
+                    "Cuando el contexto provenga de documentos, cita junto a cada afirmacion "
+                    "el nombre del archivo y la pagina con el formato [archivo.pdf, pagina N]. "
+                    "No inventes fuentes ni cites documentos que no aparezcan en el contexto. "
+                    "Entrega primero una respuesta directa y luego una seccion breve llamada Fuentes."
+                ),
+            }
+        ]
+
+        for intercambio in (historial or [])[-4:]:
+            pregunta_anterior = str(intercambio.get("pregunta", "")).strip()
+            respuesta_anterior = str(intercambio.get("respuesta", "")).strip()
+            if pregunta_anterior:
+                mensajes.append({"role": "user", "content": pregunta_anterior[:1200]})
+            if respuesta_anterior:
+                mensajes.append({"role": "assistant", "content": respuesta_anterior[:1800]})
+
+        mensajes.append(
+            {
+                "role": "user",
+                "content": f"Contexto:\n{contexto}\n\nPregunta:\n{pregunta}",
+            }
+        )
+
         try:
             respuesta = self.cliente.chat.completions.create(
                 model=self.modelo,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Eres un asistente gerencial para operaciones logisticas. "
-                            "Responde en espanol, de forma breve y ejecutiva. "
-                            "El contexto puede incluir viajes de materiales/redes, viajes de cosecha, "
-                            "mantenciones y documentos RAG. "
-                            "Tarifa Flete es el ingreso neto cobrado al cliente por realizar el movimiento; "
-                            "no lo trates como costo. Los costos de mantencion si son egresos. "
-                            "Usa solo los datos entregados como contexto. "
-                            "Si la respuesta no se puede inferir desde el contexto, dilo claramente. "
-                            "Cuando el contexto provenga de documentos, cita junto a cada afirmacion "
-                            "el nombre del archivo y la pagina con el formato [archivo.pdf, pagina N]. "
-                            "No inventes fuentes ni cites documentos que no aparezcan en el contexto. "
-                            "Entrega primero una respuesta directa y luego una seccion breve llamada Fuentes."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Contexto:\n{contexto}\n\nPregunta:\n{pregunta}",
-                    },
-                ],
+                messages=mensajes,
                 max_tokens=300,
                 temperature=0.2,
             )

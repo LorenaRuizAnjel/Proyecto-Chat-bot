@@ -2,6 +2,7 @@ from pathlib import Path
 import logging
 import re
 import unicodedata
+from time import perf_counter
 
 import altair as alt
 import pandas as pd
@@ -17,17 +18,26 @@ from modules.chatbot_openrouter import (
 from modules.lector_administracion import LectorAdministracion
 from modules.lector_pdf import LectorPDF
 from modules.lector_sql import LectorSQL
+from modules.monitoreo_calidad import ESTADOS_MEJORA, MonitoreoCalidad
 from modules.rag import (
     RAG,
     SemanticRAG,
     anexar_fuentes_documentales,
     contexto_documental_insuficiente,
 )
+from modules.catalogo_documentos import (
+    CATEGORIAS_DOCUMENTALES,
+    ESTADOS_DOCUMENTALES,
+    CatalogoDocumentos,
+)
 
 
 RUTA_SQL = "data/base_datos_chatbot_rag_transportes.sql"
 RUTA_ADMINISTRACION = "data/administracion.xlsx"
 RUTA_PDFS = "data"
+RUTA_CATALOGO_DOCUMENTOS = "data/catalogo_documentos.db"
+RUTA_MONITOREO_CALIDAD = "data/operacion_agente.db"
+RUTA_INDICE_DOCUMENTAL = "data/indice_documental"
 
 
 load_dotenv()
@@ -70,6 +80,21 @@ def obtener_marca_modificacion_pdfs():
         for archivo in sorted(carpeta.glob("*.pdf"))
     ]
     return "|".join(marcas) if marcas else "sin-pdf"
+
+
+@st.fragment(run_every="5m")
+def vigilar_actualizaciones_pdf():
+    """Recarga la aplicacion si un PDF fue creado, modificado o eliminado."""
+    marca_actual = obtener_marca_modificacion_pdfs()
+    marca_anterior = st.session_state.get("marca_documentos_pdf")
+
+    if marca_anterior is None:
+        st.session_state.marca_documentos_pdf = marca_actual
+    elif marca_anterior != marca_actual:
+        cargar_documentos_pdf.clear()
+        st.session_state.marca_documentos_pdf = marca_actual
+        st.session_state.aviso_documentos_actualizados = True
+        st.rerun()
 
 
 def aplicar_filtros_viajes(viajes):
@@ -896,7 +921,7 @@ def clasificar_intencion(pregunta):
     return "documental"
 
 
-def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None):
+def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None, historial=None):
     respuesta_cantidad_pdf = responder_cantidad_pdf(pregunta, documentos)
     if respuesta_cantidad_pdf:
         st.caption("Intención detectada localmente: inventario de documentos PDF")
@@ -913,17 +938,17 @@ def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None
         )
 
         if intencion_semantica["tipo"] == "analitica":
-            return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, intencion_semantica)
+            return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, intencion_semantica, historial)
 
         if intencion_semantica["tipo"] == "documental":
-            return responder_documental(pregunta, documentos)
+            return responder_documental(pregunta, documentos, historial)
 
     intencion = clasificar_intencion(pregunta)
 
     if intencion == "analitica":
-        return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos)
+        return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, historial=historial)
 
-    return responder_documental(pregunta, documentos)
+    return responder_documental(pregunta, documentos, historial)
 
 
 def clasificar_intencion_semantica(pregunta):
@@ -954,7 +979,7 @@ def mostrar_error_modelo_externo(error):
         )
 
 
-def responder_documental(pregunta, documentos=None):
+def responder_documental(pregunta, documentos=None, historial=None):
     if documentos is None:
         documentos = globals().get("documentos", pd.DataFrame())
 
@@ -962,7 +987,7 @@ def responder_documental(pregunta, documentos=None):
 
     @st.cache_resource(show_spinner=False)
     def construir_rag_documental(documentos_indexados):
-        return SemanticRAG(None, None, documentos_indexados)
+        return SemanticRAG(None, None, documentos_indexados, ruta_indice=RUTA_INDICE_DOCUMENTAL)
 
     try:
         rag_documental = construir_rag_documental(documentos_pdf)
@@ -980,7 +1005,7 @@ def responder_documental(pregunta, documentos=None):
 
     try:
         chatbot = ChatbotOpenRouter()
-        respuesta = chatbot.preguntar(pregunta, contexto)
+        respuesta = chatbot.preguntar(pregunta, contexto, historial)
         if not chatbot.verificar_respaldo_documental(respuesta, contexto):
             return (
                 "No puedo entregar una respuesta porque no fue posible respaldarla "
@@ -1006,7 +1031,7 @@ def responder_documental(pregunta, documentos=None):
         )
 
 
-def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None, gastos=None, intencion=None):
+def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None, gastos=None, intencion=None, historial=None):
     if viajes is None:
         viajes = globals().get("viajes_filtrados", pd.DataFrame())
     if mantenciones is None:
@@ -1038,7 +1063,7 @@ def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None,
 
     try:
         chatbot = ChatbotOpenRouter()
-        return chatbot.preguntar(pregunta, contexto)
+        return chatbot.preguntar(pregunta, contexto, historial)
     except ErrorModeloExterno as error:
         logger.exception("Error al conectar con el modelo externo: %s", error.detalle)
         mostrar_error_modelo_externo(error)
@@ -1306,6 +1331,11 @@ def mostrar_documentos(documentos):
 
 st.title("Chatbot Gerencial")
 st.caption("Consultas sobre viajes de materiales/redes, cosecha, mantenciones, equipos e ingresos netos.")
+st.info("Estás conversando con un agente de IA. Verifica las fuentes documentales antes de tomar decisiones.")
+vigilar_actualizaciones_pdf()
+
+if st.session_state.pop("aviso_documentos_actualizados", False):
+    st.toast("Los documentos PDF cambiaron y el índice fue actualizado.")
 
 try:
     base = cargar_base(str(Path(RUTA_SQL).stat().st_mtime))
@@ -1321,9 +1351,27 @@ except Exception as error:
 
 try:
     documentos_pdf = cargar_documentos_pdf(obtener_marca_modificacion_pdfs())
+    carga_documentos_pdf_exitosa = True
 except Exception as error:
     documentos_pdf = pd.DataFrame()
+    carga_documentos_pdf_exitosa = False
     st.warning(f"No fue posible cargar los PDF de data/. Detalle: {error}")
+
+try:
+    catalogo_repo = CatalogoDocumentos(RUTA_CATALOGO_DOCUMENTOS)
+    if carga_documentos_pdf_exitosa:
+        catalogo_repo.sincronizar(documentos_pdf)
+    catalogo_documentos = catalogo_repo.obtener()
+except Exception as error:
+    catalogo_repo = None
+    catalogo_documentos = pd.DataFrame()
+    st.warning(f"No fue posible actualizar el catalogo documental. Detalle: {error}")
+
+try:
+    monitoreo_calidad = MonitoreoCalidad(RUTA_MONITOREO_CALIDAD)
+except Exception as error:
+    monitoreo_calidad = None
+    st.warning(f"No fue posible iniciar el monitoreo de calidad. Detalle: {error}")
 
 viajes = base["viajes"]
 mantenciones = base["mantenciones"]
@@ -1354,7 +1402,7 @@ mostrar_kpis(
 
 st.divider()
 
-tab_chat, tab_graficos_mantencion, tab_graficos_ingresos, tab_administracion, tab_viajes, tab_mantenciones, tab_documentos = st.tabs(
+tab_chat, tab_graficos_mantencion, tab_graficos_ingresos, tab_administracion, tab_viajes, tab_mantenciones, tab_documentos, tab_curaduria, tab_monitoreo, tab_mejora = st.tabs(
     [
         "Chat",
         "Graficos mantencion",
@@ -1363,11 +1411,21 @@ tab_chat, tab_graficos_mantencion, tab_graficos_ingresos, tab_administracion, ta
         "Viajes",
         "Mantenciones",
         "Documentos RAG",
+        "Curaduria documental",
+        "Monitoreo de calidad",
+        "Ciclo de mejora",
     ]
 )
 
 with tab_chat:
     st.subheader("Consulta gerencial")
+    st.caption("El historial se conserva solo durante esta sesión y puedes evaluar cada respuesta.")
+
+    if st.button("Actualizar documentos PDF", help="Vuelve a leer los PDF y reconstruye el índice al consultar."):
+        cargar_documentos_pdf.clear()
+        st.session_state.marca_documentos_pdf = obtener_marca_modificacion_pdfs()
+        st.session_state.aviso_documentos_actualizados = True
+        st.rerun()
 
     ejemplos = [
         "Dame un resumen general",
@@ -1397,6 +1455,7 @@ with tab_chat:
         else:
             with st.spinner("Analizando datos..."):
                 try:
+                    inicio_consulta = perf_counter()
                     respuesta = responder_pregunta(
                         consulta,
                         viajes_filtrados,
@@ -1404,9 +1463,24 @@ with tab_chat:
                         documentos,
                         facturas,
                         gastos,
+                        st.session_state.historial,
                     )
+                    tiempo_respuesta_ms = (perf_counter() - inicio_consulta) * 1000
+                    consulta_id = None
+                    if monitoreo_calidad is not None:
+                        consulta_id = monitoreo_calidad.registrar_consulta(
+                            consulta,
+                            respuesta,
+                            tiempo_respuesta_ms,
+                            MODELO_OPENROUTER,
+                        )
                     st.session_state.historial.append(
-                        {"pregunta": consulta, "respuesta": respuesta}
+                        {
+                            "pregunta": consulta,
+                            "respuesta": respuesta,
+                            "feedback": None,
+                            "consulta_id": consulta_id,
+                        }
                     )
                 except Exception as error:
                     logger.exception("Error inesperado al generar la respuesta")
@@ -1414,11 +1488,35 @@ with tab_chat:
                     with st.expander("Detalle técnico del error", expanded=True):
                         st.exception(error)
 
-    for item in reversed(st.session_state.historial):
+    for indice in range(len(st.session_state.historial) - 1, -1, -1):
+        item = st.session_state.historial[indice]
         with st.chat_message("user"):
             st.write(item["pregunta"])
         with st.chat_message("assistant"):
             st.write(item["respuesta"])
+            feedback = item.get("feedback")
+            columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
+            if columna_positivo.button(
+                "👍 Útil",
+                key=f"feedback_positivo_{indice}",
+                disabled=feedback is not None,
+            ):
+                item["feedback"] = "positivo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "positivo")
+                st.toast("Gracias por tu retroalimentación.")
+            if columna_negativo.button(
+                "👎 No útil",
+                key=f"feedback_negativo_{indice}",
+                disabled=feedback is not None,
+            ):
+                item["feedback"] = "negativo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "negativo")
+                st.toast("Gracias. Usaremos esta señal para mejorar el agente.")
+            if feedback:
+                etiqueta = "Útil" if feedback == "positivo" else "No útil"
+                columna_estado.caption(f"Evaluación registrada: {etiqueta}")
 
 with tab_graficos_mantencion:
     mostrar_graficos_mantencion(mantenciones_filtradas)
@@ -1439,3 +1537,101 @@ with tab_mantenciones:
 
 with tab_documentos:
     mostrar_documentos(documentos)
+
+with tab_curaduria:
+    st.subheader("Curaduria documental")
+    st.caption(
+        "Los PDF nuevos quedan pendientes de revision. Completa responsable, version, estado y fechas "
+        "antes de declararlos oficiales. Esta etapa aun no excluye documentos de la recuperacion."
+    )
+
+    if catalogo_repo is None or catalogo_documentos.empty:
+        st.info("No hay documentos PDF disponibles para catalogar.")
+    else:
+        pendientes = int((catalogo_documentos["estado"] == "Pendiente de revision").sum())
+        no_disponibles = int((catalogo_documentos["disponible"] == 0).sum())
+        col_pendientes, col_no_disponibles = st.columns(2)
+        col_pendientes.metric("Pendientes de revision", pendientes)
+        col_no_disponibles.metric("Archivos no disponibles", no_disponibles)
+
+        catalogo_editado = st.data_editor(
+            catalogo_documentos,
+            hide_index=True,
+            width="stretch",
+            disabled=["archivo", "ultima_modificacion", "disponible"],
+            column_config={
+                "categoria": st.column_config.SelectboxColumn("Categoria", options=CATEGORIAS_DOCUMENTALES),
+                "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_DOCUMENTALES),
+                "responsable": st.column_config.TextColumn("Responsable"),
+                "version": st.column_config.TextColumn("Version"),
+                "fecha_vigencia": st.column_config.TextColumn("Fecha de vigencia"),
+                "proxima_revision": st.column_config.TextColumn("Proxima revision"),
+                "ultima_modificacion": st.column_config.TextColumn("Ultima modificacion"),
+                "disponible": st.column_config.CheckboxColumn("Disponible"),
+            },
+            key="editor_catalogo_documentos",
+        )
+
+        if st.button("Guardar curaduria documental", type="primary"):
+            catalogo_repo.guardar(catalogo_editado)
+            st.success("Curaduria documental guardada.")
+            st.rerun()
+
+with tab_monitoreo:
+    st.subheader("Monitoreo de calidad")
+    st.caption("Las metricas se guardan localmente en este equipo para identificar vacios de conocimiento.")
+
+    if monitoreo_calidad is None:
+        st.info("El monitoreo de calidad no esta disponible.")
+    else:
+        resumen_calidad = monitoreo_calidad.resumen()
+        col_total, col_sin_respuesta, col_tiempo, col_feedback = st.columns(4)
+        col_total.metric("Consultas registradas", resumen_calidad["total_consultas"])
+        col_sin_respuesta.metric("Sin respuesta", f"{resumen_calidad['tasa_sin_respuesta']:.1%}")
+        col_tiempo.metric("Tiempo promedio", f"{resumen_calidad['tiempo_promedio_ms'] / 1000:.2f} s")
+        col_feedback.metric("Feedback negativo", f"{resumen_calidad['tasa_feedback_negativo']:.1%}")
+
+        st.subheader("Preguntas recurrentes sin respuesta")
+        preguntas_sin_respuesta = monitoreo_calidad.preguntas_sin_respuesta()
+        if preguntas_sin_respuesta.empty:
+            st.info("Aun no hay preguntas sin respuesta registradas.")
+        else:
+            st.dataframe(preguntas_sin_respuesta, hide_index=True, width="stretch")
+
+        st.subheader("Respuestas con feedback negativo")
+        feedback_negativo = monitoreo_calidad.feedback_negativo()
+        if feedback_negativo.empty:
+            st.info("Aun no hay feedback negativo registrado.")
+        else:
+            st.dataframe(feedback_negativo, hide_index=True, width="stretch")
+
+with tab_mejora:
+    st.subheader("Ciclo de mejora")
+    st.caption(
+        "Esta cola prioriza mejoras a partir de preguntas sin respuesta y feedback negativo. "
+        "Asigna un responsable y actualiza el estado cuando la accion sea atendida."
+    )
+
+    if monitoreo_calidad is None:
+        st.info("El ciclo de mejora no esta disponible porque el monitoreo no pudo iniciarse.")
+    else:
+        acciones_mejora = monitoreo_calidad.acciones_mejora()
+        if acciones_mejora.empty:
+            st.info("Aun no hay acciones de mejora generadas.")
+        else:
+            acciones_editadas = st.data_editor(
+                acciones_mejora,
+                hide_index=True,
+                width="stretch",
+                disabled=["id", "tipo", "pregunta", "ocurrencias", "recomendacion", "ultima_detectada"],
+                column_config={
+                    "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_MEJORA),
+                    "responsable": st.column_config.TextColumn("Responsable"),
+                },
+                key="editor_acciones_mejora",
+            )
+
+            if st.button("Guardar acciones de mejora", type="primary"):
+                monitoreo_calidad.guardar_acciones_mejora(acciones_editadas)
+                st.success("Acciones de mejora guardadas.")
+                st.rerun()

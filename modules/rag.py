@@ -1,3 +1,7 @@
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import re
@@ -400,6 +404,7 @@ class SemanticRAG:
         model_name="paraphrase-multilingual-MiniLM-L12-v2",
         candidate_k=120,
         min_score=0.12,
+        ruta_indice=None,
     ):
         self.viajes = viajes
         self.mantenciones = mantenciones
@@ -407,6 +412,7 @@ class SemanticRAG:
         self.model_name = model_name
         self.candidate_k = candidate_k
         self.min_score = min_score
+        self.ruta_indice = Path(ruta_indice) if ruta_indice else None
 
         SentenceTransformer, NearestNeighbors = cargar_dependencias_semanticas()
         self.model = SentenceTransformer(self.model_name)
@@ -416,14 +422,10 @@ class SemanticRAG:
             dimension = self.model.get_sentence_embedding_dimension()
             self.embeddings = np.zeros((0, dimension))
             self.index = None
+            self.indice_desde_disco = False
             return
 
-        self.embeddings = self.model.encode(
-            self.docs_df["texto_embedding"].tolist(),
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        self.embeddings = self._cargar_o_crear_embeddings()
         self.index = NearestNeighbors(metric="cosine")
         self.index.fit(self.embeddings)
 
@@ -439,6 +441,61 @@ class SemanticRAG:
         return pd.DataFrame(
             columns=["tipo", "titulo", "texto", "texto_embedding", "meta", "tokens"]
         )
+
+    def _cargar_o_crear_embeddings(self):
+        firma = self._firma_corpus()
+        if self.ruta_indice is not None:
+            ruta_embeddings = self.ruta_indice / "embeddings.npy"
+            ruta_metadata = self.ruta_indice / "metadata.json"
+            try:
+                metadata = json.loads(ruta_metadata.read_text(encoding="utf-8"))
+                embeddings = np.load(ruta_embeddings, allow_pickle=False)
+                if (
+                    metadata.get("firma") == firma
+                    and metadata.get("modelo") == self.model_name
+                    and len(embeddings) == len(self.docs_df)
+                ):
+                    self.indice_desde_disco = True
+                    return embeddings
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+
+        embeddings = self.model.encode(
+            self.docs_df["texto_embedding"].tolist(),
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        self.indice_desde_disco = False
+
+        if self.ruta_indice is not None:
+            self._guardar_embeddings(embeddings, firma)
+
+        return embeddings
+
+    def _firma_corpus(self):
+        contenido = "\n".join(self.docs_df["texto_embedding"].astype(str).tolist())
+        valor = f"{self.model_name}\n{contenido}".encode("utf-8")
+        return hashlib.sha256(valor).hexdigest()
+
+    def _guardar_embeddings(self, embeddings, firma):
+        self.ruta_indice.mkdir(parents=True, exist_ok=True)
+        ruta_embeddings = self.ruta_indice / "embeddings.npy"
+        ruta_metadata = self.ruta_indice / "metadata.json"
+        temporal_embeddings = self.ruta_indice / "embeddings.tmp"
+        temporal_metadata = self.ruta_indice / "metadata.tmp"
+
+        with temporal_embeddings.open("wb") as archivo:
+            np.save(archivo, embeddings)
+        temporal_embeddings.replace(ruta_embeddings)
+
+        metadata = {
+            "firma": firma,
+            "modelo": self.model_name,
+            "fragmentos": len(self.docs_df),
+        }
+        temporal_metadata.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+        temporal_metadata.replace(ruta_metadata)
 
     def _documentos_corpus(self):
         if self.documentos is None or self.documentos.empty:

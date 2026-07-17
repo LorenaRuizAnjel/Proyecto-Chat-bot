@@ -76,6 +76,17 @@ En Windows, si tienes problemas de dependencias, ejecuta Streamlit usando explic
 
 La primera consulta abierta o documental puede tardar mas porque `sentence-transformers` descarga y cachea el modelo de embeddings. Las siguientes consultas reutilizan los indices con `st.cache_resource`.
 
+## Actualizacion del indice documental
+
+Los embeddings de los PDF se guardan en `data/indice_documental/`. Si no cambian los
+documentos, la app reutiliza ese indice; si se crea, modifica o elimina un PDF, genera
+uno nuevo. Para actualizarlo fuera de la interfaz, por ejemplo mediante una tarea diaria
+de Windows, ejecuta desde la raiz del proyecto:
+
+```powershell
+python scripts\actualizar_indice_documental.py
+```
+
 ## Publicacion en Streamlit Community Cloud
 
 Antes de publicar, verifica que estos archivos esten en el repositorio:

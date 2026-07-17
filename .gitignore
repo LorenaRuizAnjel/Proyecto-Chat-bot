@@ -7,3 +7,6 @@ venv/
 .agents/
 .codex/
 .git_invalid_backup/
+data/catalogo_documentos.db
+data/operacion_agente.db
+data/indice_documental/
