@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 st.set_page_config(
-    page_title="Chatbot Gerencial",
+    page_title="Panel de gestión operacional",
     page_icon="📊",
     layout="wide",
 )
@@ -97,98 +97,101 @@ def vigilar_actualizaciones_pdf():
         st.rerun()
 
 
-def aplicar_filtros_viajes(viajes):
-    st.sidebar.header("Filtros de viajes")
+def _reiniciar_filtros(prefijo, campos):
+    if st.button("Limpiar filtros", key=f"{prefijo}_limpiar"):
+        for campo in campos:
+            st.session_state.pop(f"{prefijo}_{campo}", None)
+        st.rerun()
 
-    fuentes = st.sidebar.multiselect(
-        "Fuente",
-        options=sorted(viajes["Fuente"].unique()),
-        default=[],
-        placeholder="Selecciona una o mas fuentes",
-    )
-    centros = st.sidebar.multiselect(
-        "Centro",
-        options=sorted(viajes["Centro"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas centros",
-    )
-    conductores = st.sidebar.multiselect(
-        "Conductor",
-        options=sorted(viajes["Conductor"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas conductores",
-    )
-    tipos_camion = st.sidebar.multiselect(
-        "Tipo camion",
-        options=sorted(viajes["Tipo Camion"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas tipos",
-    )
-    origenes = st.sidebar.multiselect(
-        "Desde",
-        options=sorted(viajes["Desde"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas origenes",
-    )
-    destinos = st.sidebar.multiselect(
-        "Hasta",
-        options=sorted(viajes["Hasta"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas destinos",
-    )
+
+def _rango_fechas(datos, clave, etiqueta="Período"):
+    fechas = pd.to_datetime(datos.get("Fecha"), errors="coerce").dropna()
+    if fechas.empty:
+        return None, None, False
+
+    inicio = fechas.min().date()
+    fin = fechas.max().date()
+    seleccionado = st.date_input(etiqueta, value=(inicio, fin), key=clave)
+    if not isinstance(seleccionado, (tuple, list)) or len(seleccionado) != 2:
+        return inicio, fin, False
+
+    desde, hasta = seleccionado
+    activo = desde != inicio or hasta != fin
+    return pd.Timestamp(desde), pd.Timestamp(hasta), activo
+
+
+def _resumen_filtros(cantidad):
+    texto = "Sin filtros activos" if not cantidad else f"{cantidad} filtro(s) activo(s)"
+    st.caption(f"{texto}. Los indicadores, gráficos y tablas de esta vista respetan esta selección.")
+
+
+def aplicar_filtros_viajes(viajes, prefijo="viajes"):
+    if viajes.empty:
+        return viajes, 0
+
+    with st.expander("Filtros de viajes", expanded=True):
+        _reiniciar_filtros(prefijo, ["periodo", "fuentes", "centros", "conductores", "tipos", "origenes", "destinos"])
+        col_periodo, col_fuente, col_centro = st.columns(3)
+        with col_periodo:
+            desde, hasta, periodo_activo = _rango_fechas(viajes, f"{prefijo}_periodo")
+        with col_fuente:
+            fuentes = st.multiselect("Fuente", sorted(viajes["Fuente"].unique()), key=f"{prefijo}_fuentes")
+        with col_centro:
+            centros = st.multiselect("Centro", sorted(viajes["Centro"].unique()), key=f"{prefijo}_centros")
+
+        col_conductor, col_camion, col_origen, col_destino = st.columns(4)
+        with col_conductor:
+            conductores = st.multiselect("Conductor", sorted(viajes["Conductor"].unique()), key=f"{prefijo}_conductores")
+        with col_camion:
+            tipos_camion = st.multiselect("Tipo de camión", sorted(viajes["Tipo Camion"].unique()), key=f"{prefijo}_tipos")
+        with col_origen:
+            origenes = st.multiselect("Origen", sorted(viajes["Desde"].unique()), key=f"{prefijo}_origenes")
+        with col_destino:
+            destinos = st.multiselect("Destino", sorted(viajes["Hasta"].unique()), key=f"{prefijo}_destinos")
 
     filtrados = viajes.copy()
+    if desde is not None:
+        filtrados = filtrados[filtrados["Fecha"].between(desde, hasta)]
+    for columna, seleccion in [
+        ("Fuente", fuentes),
+        ("Centro", centros),
+        ("Conductor", conductores),
+        ("Tipo Camion", tipos_camion),
+        ("Desde", origenes),
+        ("Hasta", destinos),
+    ]:
+        if seleccion:
+            filtrados = filtrados[filtrados[columna].isin(seleccion)]
 
-    if fuentes:
-        filtrados = filtrados[filtrados["Fuente"].isin(fuentes)]
-
-    if centros:
-        filtrados = filtrados[filtrados["Centro"].isin(centros)]
-
-    if conductores:
-        filtrados = filtrados[filtrados["Conductor"].isin(conductores)]
-
-    if tipos_camion:
-        filtrados = filtrados[filtrados["Tipo Camion"].isin(tipos_camion)]
-
-    if origenes:
-        filtrados = filtrados[filtrados["Desde"].isin(origenes)]
-
-    if destinos:
-        filtrados = filtrados[filtrados["Hasta"].isin(destinos)]
-
-    return filtrados
+    activos = sum(bool(valor) for valor in [periodo_activo, fuentes, centros, conductores, tipos_camion, origenes, destinos])
+    return filtrados, activos
 
 
-def aplicar_filtros_mantenciones(mantenciones):
+def aplicar_filtros_mantenciones(mantenciones, prefijo="mantenciones"):
     if mantenciones.empty:
-        return mantenciones
+        st.info("No hay mantenciones disponibles para filtrar.")
+        return mantenciones, 0
 
-    st.sidebar.header("Filtros de mantenciones")
-
-    patentes = st.sidebar.multiselect(
-        "Patente mantencion",
-        options=sorted(mantenciones["Patente"].unique()),
-        default=[],
-        placeholder="Selecciona una o mas patentes",
-    )
-    tipos = st.sidebar.multiselect(
-        "Tipo mantencion",
-        options=sorted(mantenciones["Tipo Mantencion"].unique()),
-        default=[],
-        placeholder="Selecciona uno o mas tipos",
-    )
+    with st.expander("Filtros de mantenciones", expanded=True):
+        _reiniciar_filtros(prefijo, ["periodo", "patentes", "tipos"])
+        col_periodo, col_patente, col_tipo = st.columns(3)
+        with col_periodo:
+            desde, hasta, periodo_activo = _rango_fechas(mantenciones, f"{prefijo}_periodo")
+        with col_patente:
+            patentes = st.multiselect("Patente", sorted(mantenciones["Patente"].unique()), key=f"{prefijo}_patentes")
+        with col_tipo:
+            tipos = st.multiselect("Tipo de mantención", sorted(mantenciones["Tipo Mantencion"].unique()), key=f"{prefijo}_tipos")
 
     filtradas = mantenciones.copy()
-
+    if desde is not None:
+        filtradas = filtradas[filtradas["Fecha"].between(desde, hasta)]
     if patentes:
         filtradas = filtradas[filtradas["Patente"].isin(patentes)]
-
     if tipos:
         filtradas = filtradas[filtradas["Tipo Mantencion"].isin(tipos)]
 
-    filtradas.attrs["filtros_mantenciones_activos"] = bool(patentes or tipos)
-    return filtradas
+    activos = sum(bool(valor) for valor in [periodo_activo, patentes, tipos])
+    return filtradas, activos
 
 
 def calcular_kpis_viajes(viajes):
@@ -249,6 +252,159 @@ def mostrar_kpis(kpis_viajes, kpis_flota, filtros_mantenciones_activos=False):
     col7.metric("Costo mantenciones flota", f"${kpis_flota['costo_mantenciones']:,.0f}")
     col8.metric("Costo promedio por mantencion", f"${kpis_flota['costo_promedio_mantencion']:,.0f}")
     col9.metric("Vehiculos/patentes con mantencion", f"{kpis_flota['vehiculos_con_mantencion']:.0f}")
+
+
+def texto_periodo(datos):
+    fechas = pd.to_datetime(datos.get("Fecha"), errors="coerce").dropna()
+    if fechas.empty:
+        return "Sin fechas disponibles"
+    return f"{fechas.min():%d-%m-%Y} al {fechas.max():%d-%m-%Y}"
+
+
+def evolucion_operacional(viajes, mantenciones):
+    ingresos = pd.DataFrame(columns=["Mes", "Ingresos operacionales"])
+    costos = pd.DataFrame(columns=["Mes", "Costos de mantención"])
+    if not viajes.empty:
+        ingresos = viajes.assign(Mes=viajes["Fecha"].dt.to_period("M").astype(str)).groupby("Mes", as_index=False)["Ingreso Neto"].sum()
+        ingresos = ingresos.rename(columns={"Ingreso Neto": "Ingresos operacionales"})
+    if not mantenciones.empty:
+        costos = mantenciones.assign(Mes=mantenciones["Fecha"].dt.to_period("M").astype(str)).groupby("Mes", as_index=False)["Costo Total"].sum()
+        costos = costos.rename(columns={"Costo Total": "Costos de mantención"})
+
+    mensual = pd.merge(ingresos, costos, on="Mes", how="outer").fillna(0)
+    if mensual.empty:
+        return mensual
+    return mensual.sort_values("Mes")
+
+
+def grafico_evolucion_operacional(datos, alto=340):
+    datos_largos = datos.melt("Mes", var_name="Indicador", value_name="Monto")
+    return (
+        alt.Chart(datos_largos)
+        .mark_line(point=alt.OverlayMarkDef(filled=True, size=70), strokeWidth=3)
+        .encode(
+            x=alt.X("Mes:N", title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Monto:Q", title="Monto (CLP)", axis=alt.Axis(format="~s", grid=True)),
+            color=alt.Color(
+                "Indicador:N",
+                scale=alt.Scale(
+                    domain=["Ingresos operacionales", "Costos de mantención"],
+                    range=["#287271", "#e76f51"],
+                ),
+                legend=alt.Legend(orient="bottom"),
+            ),
+            tooltip=[
+                alt.Tooltip("Mes:N", title="Mes"),
+                alt.Tooltip("Indicador:N", title="Indicador"),
+                alt.Tooltip("Monto:Q", title="Monto", format=",.0f"),
+            ],
+        )
+        .properties(height=alto)
+        .configure_view(strokeWidth=0)
+    )
+
+
+def obtener_alertas(facturas, catalogo_documentos, mantenciones, monitoreo_calidad):
+    alertas = []
+    if not facturas.empty:
+        pendientes = facturas[facturas["Estado"].str.lower() == "pendiente"]
+        if not pendientes.empty:
+            monto = float(pendientes["Monto_Total"].sum())
+            alertas.append(("Facturas pendientes", f"{len(pendientes)} factura(s) pendiente(s) por {formato_pesos(monto)}."))
+
+    if not catalogo_documentos.empty:
+        pendientes_revision = int((catalogo_documentos["estado"] == "Pendiente de revision").sum())
+        if pendientes_revision:
+            alertas.append(("Curaduría documental", f"{pendientes_revision} documento(s) pendiente(s) de revisión."))
+
+    if monitoreo_calidad is not None:
+        negativos = monitoreo_calidad.feedback_negativo(limite=1000)
+        if not negativos.empty:
+            alertas.append(("Calidad del asistente", f"{len(negativos)} respuesta(s) con feedback negativo requieren revisión."))
+
+    if not mantenciones.empty:
+        costos = mantenciones.groupby("Patente", dropna=False)["Costo Total"].sum().sort_values(ascending=False)
+        if len(costos) >= 2:
+            umbral = costos.quantile(0.75)
+            criticos = costos[costos >= umbral]
+            if not criticos.empty:
+                patentes = ", ".join(criticos.head(3).index.astype(str))
+                alertas.append(("Costos de mantención", f"Patentes sobre el percentil 75 de costo acumulado: {patentes}."))
+    return alertas
+
+
+def mostrar_resumen(viajes, mantenciones, facturas, catalogo_documentos, monitoreo_calidad):
+    st.title("Panel de gestión operacional")
+    col_titulo, col_accion = st.columns([5, 1])
+    with col_titulo:
+        st.caption(f"Período operativo analizado: {texto_periodo(viajes)} · Vista sin filtros")
+        st.caption(f"Última actualización de la vista: {pd.Timestamp.now():%d-%m-%Y %H:%M}")
+    with col_accion:
+        if st.button("Actualizar datos", key="resumen_actualizar"):
+            cargar_base.clear()
+            cargar_administracion.clear()
+            cargar_documentos_pdf.clear()
+            st.rerun()
+
+    kpis_viajes = calcular_kpis_viajes(viajes)
+    kpis_flota = calcular_kpis_flota(mantenciones)
+    ingreso = kpis_viajes["ingreso_neto"]
+    costos = kpis_flota["costo_mantenciones"]
+    resultado = ingreso - costos
+    margen = (resultado / ingreso * 100) if ingreso else 0
+
+    kpi_viajes, kpi_ingreso, kpi_costos, kpi_resultado, kpi_margen = st.columns(5)
+    kpi_viajes.metric("Viajes realizados", f"{kpis_viajes['viajes']:,}", help="Dato real de viajes registrados.")
+    kpi_ingreso.metric("Ingresos operacionales", formato_pesos(ingreso), help="Ingreso neto proveniente de viajes registrados.")
+    kpi_costos.metric("Costos de mantención", formato_pesos(costos), help="Costo total de mantenciones registradas.")
+    kpi_resultado.metric("Resultado operacional estimado", formato_pesos(resultado), help="Ingresos operacionales menos costos de mantención.")
+    kpi_margen.metric("Margen operacional", formato_porcentaje(margen), help="Resultado operacional estimado dividido por ingresos operacionales.")
+    st.caption(
+        "Valores en CLP · datos sin filtros. El resultado y margen son estimaciones operacionales: no representan utilidad contable ni incorporan gastos administrativos, impuestos o devengos."
+    )
+
+    col_evolucion, col_alertas = st.columns([3, 2])
+    with col_evolucion:
+        st.subheader("Evolución operacional")
+        mensual = evolucion_operacional(viajes, mantenciones)
+        if mensual.empty:
+            st.info("No hay información mensual suficiente para mostrar la evolución.")
+        else:
+            st.altair_chart(grafico_evolucion_operacional(mensual), width="stretch")
+        st.caption("Ingresos de viajes y costos de mantención se presentan como componentes operacionales, no como cifras contables equivalentes.")
+    with col_alertas:
+        st.subheader("Situaciones que requieren atención")
+        alertas = obtener_alertas(facturas, catalogo_documentos, mantenciones, monitoreo_calidad)
+        if not alertas:
+            st.success("No hay alertas relevantes con la información disponible.")
+        else:
+            for titulo, detalle in alertas[:4]:
+                st.warning(f"{titulo}: {detalle}")
+
+    col_actividad, col_flota = st.columns(2)
+    with col_actividad:
+        st.subheader("Actividad operacional reciente")
+        if viajes.empty:
+            st.info("No hay viajes recientes disponibles.")
+        else:
+            columnas = ["Fecha", "Centro", "Conductor", "Ruta", "Ingreso Neto"]
+            st.dataframe(viajes.sort_values("Fecha", ascending=False).head(5)[columnas], hide_index=True, width="stretch")
+            if st.button("Ver detalle de viajes", key="resumen_ver_viajes"):
+                st.session_state.seccion_principal = "Operaciones"
+                st.session_state.operaciones_seccion = "Viajes"
+                st.rerun()
+    with col_flota:
+        st.subheader("Estado resumido de la flota")
+        if mantenciones.empty:
+            st.info("No hay mantenciones disponibles.")
+        else:
+            flota = mantenciones.groupby("Patente", as_index=False).agg(Mantenciones=("ID Mantencion", "count"), Costo_Total=("Costo Total", "sum"))
+            flota = flota.sort_values("Costo_Total", ascending=False).head(5).rename(columns={"Costo_Total": "Costo total"})
+            st.dataframe(flota, hide_index=True, width="stretch")
+            if st.button("Ver detalle de mantenciones", key="resumen_ver_mantenciones"):
+                st.session_state.seccion_principal = "Operaciones"
+                st.session_state.operaciones_seccion = "Mantenciones"
+                st.rerun()
 
 
 def formato_pesos(valor):
@@ -367,57 +523,44 @@ def grafico_lineas_financieras(datos, alto=340):
     )
 
 
-def filtrar_administracion(facturas, gastos):
-    st.subheader("Filtros administrativos")
+def filtrar_administracion(facturas, gastos, prefijo="finanzas"):
+    if facturas.empty and gastos.empty:
+        return facturas, gastos, 0
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        clientes = st.multiselect(
-            "Cliente",
-            options=sorted(facturas["Cliente"].unique()),
-            default=[],
-            placeholder="Selecciona uno o mas clientes",
-        )
-    with col2:
-        estados = st.multiselect(
-            "Estado factura",
-            options=sorted(facturas["Estado"].unique()),
-            default=[],
-            placeholder="Selecciona uno o mas estados",
-        )
-    with col3:
-        categorias = st.multiselect(
-            "Categoria gasto",
-            options=sorted(gastos["Categoria"].unique()),
-            default=[],
-            placeholder="Selecciona una o mas categorias",
-        )
+    datos_periodo = pd.concat(
+        [datos[["Fecha"]] for datos in [facturas, gastos] if not datos.empty],
+        ignore_index=True,
+    )
 
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        servicios = st.multiselect(
-            "Servicio",
-            options=sorted(facturas["Servicio"].unique()),
-            default=[],
-            placeholder="Selecciona uno o mas servicios",
+    with st.expander("Filtros de finanzas", expanded=True):
+        _reiniciar_filtros(
+            prefijo,
+            ["periodo", "clientes", "estados", "categorias", "servicios", "centros", "proveedores"],
         )
-    with col5:
-        centros = st.multiselect(
-            "Centro de costo",
-            options=sorted(gastos["Centro_Costo"].unique()),
-            default=[],
-            placeholder="Selecciona uno o mas centros",
-        )
-    with col6:
-        proveedores = st.multiselect(
-            "Proveedor",
-            options=sorted(gastos["Proveedor"].unique()),
-            default=[],
-            placeholder="Selecciona uno o mas proveedores",
-        )
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            desde, hasta, periodo_activo = _rango_fechas(datos_periodo, f"{prefijo}_periodo")
+        with col2:
+            clientes = st.multiselect("Cliente", sorted(facturas["Cliente"].unique()), key=f"{prefijo}_clientes")
+        with col3:
+            estados = st.multiselect("Estado de factura", sorted(facturas["Estado"].unique()), key=f"{prefijo}_estados")
+
+        col4, col5, col6, col7 = st.columns(4)
+        with col4:
+            categorias = st.multiselect("Categoría de gasto", sorted(gastos["Categoria"].unique()), key=f"{prefijo}_categorias")
+        with col5:
+            servicios = st.multiselect("Servicio", sorted(facturas["Servicio"].unique()), key=f"{prefijo}_servicios")
+        with col6:
+            centros = st.multiselect("Centro de costo", sorted(gastos["Centro_Costo"].unique()), key=f"{prefijo}_centros")
+        with col7:
+            proveedores = st.multiselect("Proveedor", sorted(gastos["Proveedor"].unique()), key=f"{prefijo}_proveedores")
 
     facturas_filtradas = facturas.copy()
     gastos_filtrados = gastos.copy()
+
+    if desde is not None:
+        facturas_filtradas = facturas_filtradas[facturas_filtradas["Fecha"].between(desde, hasta)]
+        gastos_filtrados = gastos_filtrados[gastos_filtrados["Fecha"].between(desde, hasta)]
 
     if clientes:
         facturas_filtradas = facturas_filtradas[facturas_filtradas["Cliente"].isin(clientes)]
@@ -437,7 +580,8 @@ def filtrar_administracion(facturas, gastos):
     if proveedores:
         gastos_filtrados = gastos_filtrados[gastos_filtrados["Proveedor"].isin(proveedores)]
 
-    return facturas_filtradas, gastos_filtrados
+    activos = sum(bool(valor) for valor in [periodo_activo, clientes, estados, categorias, servicios, centros, proveedores])
+    return facturas_filtradas, gastos_filtrados, activos
 
 
 def mostrar_administracion(facturas, gastos, kpis_excel):
@@ -445,7 +589,8 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
         st.info("No hay datos administrativos disponibles.")
         return
 
-    facturas_filtradas, gastos_filtrados = filtrar_administracion(facturas, gastos)
+    facturas_filtradas, gastos_filtrados, filtros_activos = filtrar_administracion(facturas, gastos)
+    _resumen_filtros(filtros_activos)
 
     ingresos = float(facturas_filtradas["Monto_Neto"].sum()) if not facturas_filtradas.empty else 0
     gastos_total = float(gastos_filtrados["Monto"].sum()) if not gastos_filtrados.empty else 0
@@ -463,9 +608,9 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
     )
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Facturacion neta", formato_pesos(ingresos))
+    col1.metric("Facturación neta", formato_pesos(ingresos), help="Dato administrativo proveniente de facturas.")
     col2.metric("Gastos", formato_pesos(gastos_total))
-    col3.metric("Utilidad estimada", formato_pesos(utilidad))
+    col3.metric("Resultado administrativo", formato_pesos(utilidad), help="Facturación neta menos gastos registrados en esta vista.")
     col4.metric("Margen", formato_porcentaje(margen))
 
     col5, col6, col7, col8 = st.columns(4)
@@ -514,7 +659,7 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
         mensual["Utilidad"] = mensual["Facturacion"] - mensual["Gastos"]
 
         st.subheader("Evolucion financiera mensual")
-        st.altair_chart(grafico_lineas_financieras(mensual), use_container_width=True)
+        st.altair_chart(grafico_lineas_financieras(mensual), width="stretch")
 
     col9, col10 = st.columns(2)
     with col9:
@@ -531,7 +676,7 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
             )
             st.altair_chart(
                 grafico_barras_horizontales(clientes, "Cliente", "Monto_Neto", "Facturacion neta", "greens"),
-                use_container_width=True,
+                width="stretch",
             )
 
     with col10:
@@ -547,7 +692,7 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
             )
             st.altair_chart(
                 grafico_barras_horizontales(categorias, "Categoria", "Monto", "Gastos", "orangered"),
-                use_container_width=True,
+                width="stretch",
             )
 
     col11, col12 = st.columns(2)
@@ -563,7 +708,7 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
             )
             st.altair_chart(
                 grafico_donut(estados, "Estado", "Monto_Total", alto=320, titulo_valor="Monto total"),
-                use_container_width=True,
+                width="stretch",
             )
 
     with col12:
@@ -579,7 +724,7 @@ def mostrar_administracion(facturas, gastos, kpis_excel):
             )
             st.altair_chart(
                 grafico_barras_horizontales(centros, "Centro_Costo", "Monto", "Gastos", "goldorange", alto=320),
-                use_container_width=True,
+                width="stretch",
             )
 
     st.subheader("Facturas pendientes")
@@ -629,7 +774,7 @@ def mostrar_graficos_mantencion(mantenciones):
                 esquema="blues",
                 alto=360,
             ),
-            use_container_width=True,
+                width="stretch",
         )
 
     with col2:
@@ -644,7 +789,7 @@ def mostrar_graficos_mantencion(mantenciones):
                 esquema="orangered",
                 alto=360,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     col3, col4 = st.columns(2)
@@ -665,7 +810,7 @@ def mostrar_graficos_mantencion(mantenciones):
                 esquema="goldorange",
                 alto=320,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     with col4:
@@ -679,7 +824,7 @@ def mostrar_graficos_mantencion(mantenciones):
         )
         st.altair_chart(
             grafico_linea(costos_mes, "Mes", "Costo_Total", "Costo total", color="#e76f51", alto=320),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Resumen por camion")
@@ -720,7 +865,7 @@ def mostrar_graficos_ingresos(viajes):
                 esquema="greens",
                 alto=360,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     with col2:
@@ -734,7 +879,7 @@ def mostrar_graficos_ingresos(viajes):
                 esquema="tealblues",
                 alto=360,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     col3, col4 = st.columns(2)
@@ -749,7 +894,7 @@ def mostrar_graficos_ingresos(viajes):
                 esquema="purples",
                 alto=360,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     with col4:
@@ -763,7 +908,7 @@ def mostrar_graficos_ingresos(viajes):
                 esquema="bluegreen",
                 alto=360,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     col5, col6 = st.columns(2)
@@ -778,7 +923,7 @@ def mostrar_graficos_ingresos(viajes):
                 esquema="viridis",
                 alto=320,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     with col6:
@@ -791,7 +936,7 @@ def mostrar_graficos_ingresos(viajes):
         )
         st.altair_chart(
             grafico_donut(ingresos_fuente, "Fuente", "Ingreso_Neto", alto=320),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Ingresos mensuales")
@@ -804,7 +949,7 @@ def mostrar_graficos_ingresos(viajes):
     )
     st.altair_chart(
         grafico_linea(ingresos_mes, "Mes", "Ingreso_Neto", "Ingreso neto", color="#2a9d8f", alto=320),
-        use_container_width=True,
+        width="stretch",
     )
 
     st.subheader("Detalle de ingresos por conductor")
@@ -1329,13 +1474,79 @@ def mostrar_documentos(documentos):
             )
 
 
-st.title("Chatbot Gerencial")
-st.caption("Consultas sobre viajes de materiales/redes, cosecha, mantenciones, equipos e ingresos netos.")
-st.info("Estás conversando con un agente de IA. Verifica las fuentes documentales antes de tomar decisiones.")
-vigilar_actualizaciones_pdf()
+def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_calidad):
+    st.title("Consultar a la IA")
+    st.info("Estás conversando con un agente de IA. Verifica las fuentes documentales antes de tomar decisiones.")
+    st.caption("La consulta utiliza la base disponible completa; los filtros de Operaciones y Finanzas no afectan esta conversación.")
 
-if st.session_state.pop("aviso_documentos_actualizados", False):
-    st.toast("Los documentos PDF cambiaron y el índice fue actualizado.")
+    if "historial" not in st.session_state:
+        st.session_state.historial = []
+
+    col_titulo, col_limpiar = st.columns([5, 1])
+    with col_titulo:
+        st.subheader("Conversación")
+    with col_limpiar:
+        if st.button("Limpiar historial", key="chat_limpiar_historial"):
+            st.session_state.historial = []
+            st.rerun()
+
+    for indice, item in enumerate(st.session_state.historial):
+        with st.chat_message("user"):
+            st.write(item["pregunta"])
+        with st.chat_message("assistant"):
+            st.write(item["respuesta"])
+            feedback = item.get("feedback")
+            columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
+            if columna_positivo.button("👍 Útil", key=f"feedback_positivo_{indice}", disabled=feedback is not None):
+                item["feedback"] = "positivo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "positivo")
+                st.toast("Gracias por tu retroalimentación.")
+            if columna_negativo.button("👎 No útil", key=f"feedback_negativo_{indice}", disabled=feedback is not None):
+                item["feedback"] = "negativo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "negativo")
+                st.toast("Gracias. Usaremos esta señal para mejorar el agente.")
+            if feedback:
+                columna_estado.caption(f"Evaluación registrada: {'Útil' if feedback == 'positivo' else 'No útil'}")
+
+    st.subheader("Nueva consulta")
+    ejemplos = [
+        "Dame un resumen general",
+        "Qué centros tienen mayor ingreso neto",
+        "Qué conductores concentran mayor ingreso neto",
+        "Qué rutas tienen mayor ingreso neto",
+        "Compara ingresos por fuente de viaje",
+        "Qué patentes tienen mayor costo de mantención",
+        "Qué tipos de mantención tienen mayor costo",
+        "Qué centros tienen más guías",
+    ]
+    pregunta = st.selectbox("Pregunta rápida", [""] + ejemplos, key="chat_pregunta_rapida", placeholder="Selecciona una pregunta")
+    pregunta_manual = st.text_input("O escribe tu pregunta", key="chat_pregunta_manual")
+    consulta = pregunta_manual.strip() or pregunta
+
+    if st.button("Consultar", key="chat_consultar", type="primary"):
+        if not consulta:
+            st.warning("Debes escribir o seleccionar una pregunta.")
+        else:
+            with st.spinner("Analizando datos y documentos..."):
+                try:
+                    inicio_consulta = perf_counter()
+                    respuesta = responder_pregunta(consulta, viajes, mantenciones, documentos, facturas, gastos, st.session_state.historial)
+                    tiempo_respuesta_ms = (perf_counter() - inicio_consulta) * 1000
+                    consulta_id = None
+                    if monitoreo_calidad is not None:
+                        consulta_id = monitoreo_calidad.registrar_consulta(consulta, respuesta, tiempo_respuesta_ms, MODELO_OPENROUTER)
+                    st.session_state.historial.append({"pregunta": consulta, "respuesta": respuesta, "feedback": None, "consulta_id": consulta_id})
+                    st.rerun()
+                except Exception as error:
+                    logger.exception("Error inesperado al generar la respuesta")
+                    st.error(f"No se pudo generar la respuesta. Detalle: {error}")
+                    with st.expander("Detalle técnico del error", expanded=True):
+                        st.exception(error)
+
+
+vigilar_actualizaciones_pdf()
 
 try:
     base = cargar_base(str(Path(RUTA_SQL).stat().st_mtime))
@@ -1365,7 +1576,7 @@ try:
 except Exception as error:
     catalogo_repo = None
     catalogo_documentos = pd.DataFrame()
-    st.warning(f"No fue posible actualizar el catalogo documental. Detalle: {error}")
+    st.warning(f"No fue posible actualizar el catálogo documental. Detalle: {error}")
 
 try:
     monitoreo_calidad = MonitoreoCalidad(RUTA_MONITOREO_CALIDAD)
@@ -1376,262 +1587,175 @@ except Exception as error:
 viajes = base["viajes"]
 mantenciones = base["mantenciones"]
 documentos = pd.concat([base["documentos"], documentos_pdf], ignore_index=True)
+if "Referencia ID" in documentos.columns:
+    documentos["Referencia ID"] = documentos["Referencia ID"].fillna("").astype(str)
 facturas = administracion["facturas"]
 gastos = administracion["gastos"]
 kpis_administracion = administracion["kpis"]
 
-if viajes.empty:
-    st.warning("No hay viajes disponibles en la base cargada.")
-    st.stop()
+if st.session_state.pop("aviso_documentos_actualizados", False):
+    st.toast("Los documentos PDF cambiaron y el índice fue actualizado.")
 
-viajes_filtrados = aplicar_filtros_viajes(viajes)
-mantenciones_filtradas = aplicar_filtros_mantenciones(mantenciones)
-
-if viajes_filtrados.empty:
-    st.warning("No hay viajes para los filtros seleccionados.")
-    st.stop()
-
-analizador = AnalizadorOperacional(viajes_filtrados, mantenciones_filtradas)
-kpis_viajes = calcular_kpis_viajes(viajes_filtrados)
-kpis_flota = calcular_kpis_flota(mantenciones_filtradas)
-mostrar_kpis(
-    kpis_viajes,
-    kpis_flota,
-    mantenciones_filtradas.attrs.get("filtros_mantenciones_activos", False),
-)
-
-st.divider()
-
-tab_chat, tab_graficos_mantencion, tab_graficos_ingresos, tab_administracion, tab_viajes, tab_mantenciones, tab_documentos, tab_curaduria, tab_monitoreo, tab_mejora = st.tabs(
-    [
-        "Chat",
-        "Graficos mantencion",
-        "Graficos ingresos",
-        "Administracion",
-        "Viajes",
-        "Mantenciones",
-        "Documentos RAG",
-        "Curaduria documental",
-        "Monitoreo de calidad",
-        "Ciclo de mejora",
-    ]
-)
-
-with tab_chat:
-    st.subheader("Consulta gerencial")
-    st.caption("El historial se conserva solo durante esta sesión y puedes evaluar cada respuesta.")
-
-    if st.button("Actualizar documentos PDF", help="Vuelve a leer los PDF y reconstruye el índice al consultar."):
-        cargar_documentos_pdf.clear()
-        st.session_state.marca_documentos_pdf = obtener_marca_modificacion_pdfs()
-        st.session_state.aviso_documentos_actualizados = True
-        st.rerun()
-
-    ejemplos = [
-        "Dame un resumen general",
-        "Que centros tienen mayor ingreso neto",
-        "Que conductores concentran mayor ingreso neto",
-        "Que rutas tienen mayor ingreso neto",
-        "Compara ingresos por fuente de viaje",
-        "Que patentes tienen mayor costo de mantencion",
-        "Que tipos de mantencion tienen mayor costo",
-        "Que centros tienen mas guias",
-    ]
-
-    pregunta = st.selectbox(
-        "Pregunta rapida",
-        [""] + ejemplos,
-        placeholder="Selecciona una pregunta",
+with st.sidebar:
+    st.title("Panel de gestión")
+    st.caption("Navegación principal")
+    seccion = st.radio(
+        "Sección",
+        ["Resumen", "Consultar a la IA", "Operaciones", "Finanzas", "Gestión del asistente"],
+        key="seccion_principal",
+        label_visibility="collapsed",
     )
-    pregunta_manual = st.text_input("O escribe tu pregunta")
-    consulta = pregunta_manual.strip() or pregunta
+    st.divider()
+    st.caption("La gestión del asistente está separada para habilitar control por roles cuando exista autenticación. Actualmente no se restringe el acceso porque el proyecto no tiene usuarios ni roles.")
 
-    if "historial" not in st.session_state:
-        st.session_state.historial = []
+if seccion == "Resumen":
+    mostrar_resumen(viajes, mantenciones, facturas, catalogo_documentos, monitoreo_calidad)
 
-    if st.button("Consultar", type="primary"):
-        if not consulta:
-            st.warning("Debes escribir o seleccionar una pregunta.")
+elif seccion == "Consultar a la IA":
+    mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_calidad)
+
+elif seccion == "Operaciones":
+    st.title("Operaciones")
+    st.caption("Analiza viajes y mantenciones por separado para conservar su alcance operacional.")
+    subseccion = st.radio("Vista", ["Viajes", "Mantenciones"], horizontal=True, key="operaciones_seccion")
+
+    if subseccion == "Viajes":
+        viajes_filtrados, filtros_activos = aplicar_filtros_viajes(viajes)
+        _resumen_filtros(filtros_activos)
+        if viajes_filtrados.empty:
+            st.info("No hay viajes para los filtros seleccionados.")
         else:
-            with st.spinner("Analizando datos..."):
-                try:
-                    inicio_consulta = perf_counter()
-                    respuesta = responder_pregunta(
-                        consulta,
-                        viajes_filtrados,
-                        mantenciones_filtradas,
-                        documentos,
-                        facturas,
-                        gastos,
-                        st.session_state.historial,
-                    )
-                    tiempo_respuesta_ms = (perf_counter() - inicio_consulta) * 1000
-                    consulta_id = None
-                    if monitoreo_calidad is not None:
-                        consulta_id = monitoreo_calidad.registrar_consulta(
-                            consulta,
-                            respuesta,
-                            tiempo_respuesta_ms,
-                            MODELO_OPENROUTER,
-                        )
-                    st.session_state.historial.append(
-                        {
-                            "pregunta": consulta,
-                            "respuesta": respuesta,
-                            "feedback": None,
-                            "consulta_id": consulta_id,
-                        }
-                    )
-                except Exception as error:
-                    logger.exception("Error inesperado al generar la respuesta")
-                    st.error(f"No se pudo generar la respuesta. Detalle: {error}")
-                    with st.expander("Detalle técnico del error", expanded=True):
-                        st.exception(error)
+            kpis_viajes = calcular_kpis_viajes(viajes_filtrados)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Viajes", f"{kpis_viajes['viajes']:,}")
+            col2.metric("Ingresos de viajes", formato_pesos(kpis_viajes["ingreso_neto"]))
+            col3.metric("Guías", f"{kpis_viajes['guias']:,}")
+            col4.metric("Fuentes", f"{kpis_viajes['fuentes_viajes']:,}")
+            st.caption("Datos reales de viajes. Los ingresos no corresponden a la facturación administrativa.")
+            mostrar_graficos_ingresos(viajes_filtrados)
+            with st.expander("Ver tabla de viajes", expanded=False):
+                st.dataframe(viajes_filtrados, width="stretch")
 
-    for indice in range(len(st.session_state.historial) - 1, -1, -1):
-        item = st.session_state.historial[indice]
-        with st.chat_message("user"):
-            st.write(item["pregunta"])
-        with st.chat_message("assistant"):
-            st.write(item["respuesta"])
-            feedback = item.get("feedback")
-            columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
-            if columna_positivo.button(
-                "👍 Útil",
-                key=f"feedback_positivo_{indice}",
-                disabled=feedback is not None,
-            ):
-                item["feedback"] = "positivo"
-                if monitoreo_calidad is not None and item.get("consulta_id"):
-                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "positivo")
-                st.toast("Gracias por tu retroalimentación.")
-            if columna_negativo.button(
-                "👎 No útil",
-                key=f"feedback_negativo_{indice}",
-                disabled=feedback is not None,
-            ):
-                item["feedback"] = "negativo"
-                if monitoreo_calidad is not None and item.get("consulta_id"):
-                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "negativo")
-                st.toast("Gracias. Usaremos esta señal para mejorar el agente.")
-            if feedback:
-                etiqueta = "Útil" if feedback == "positivo" else "No útil"
-                columna_estado.caption(f"Evaluación registrada: {etiqueta}")
+    else:
+        mantenciones_filtradas, filtros_activos = aplicar_filtros_mantenciones(mantenciones)
+        _resumen_filtros(filtros_activos)
+        if mantenciones_filtradas.empty:
+            st.info("No hay mantenciones para los filtros seleccionados.")
+        else:
+            kpis_flota = calcular_kpis_flota(mantenciones_filtradas)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Mantenciones", f"{kpis_flota['mantenciones']:,}")
+            col2.metric("Costo total", formato_pesos(kpis_flota["costo_mantenciones"]))
+            col3.metric("Costo promedio", formato_pesos(kpis_flota["costo_promedio_mantencion"]))
+            col4.metric("Patentes", f"{kpis_flota['vehiculos_con_mantencion']:,}")
+            st.caption("Costos reales de mantenciones registradas; no se atribuyen automáticamente a un viaje o conductor.")
+            mostrar_graficos_mantencion(mantenciones_filtradas)
+            with st.expander("Ver tabla de mantenciones", expanded=False):
+                st.dataframe(mantenciones_filtradas, width="stretch")
 
-with tab_graficos_mantencion:
-    mostrar_graficos_mantencion(mantenciones_filtradas)
-
-with tab_graficos_ingresos:
-    mostrar_graficos_ingresos(viajes_filtrados)
-
-with tab_administracion:
+elif seccion == "Finanzas":
+    st.title("Finanzas")
+    st.caption("Facturación y gastos administrativos. Estas cifras se muestran separadas de los ingresos operacionales por viajes.")
     mostrar_administracion(facturas, gastos, kpis_administracion)
 
-with tab_viajes:
-    st.subheader("Viajes disponibles")
-    st.dataframe(viajes_filtrados, width="stretch")
-
-with tab_mantenciones:
-    st.subheader("Mantenciones disponibles")
-    st.dataframe(mantenciones_filtradas, width="stretch")
-
-with tab_documentos:
-    mostrar_documentos(documentos)
-
-with tab_curaduria:
-    st.subheader("Curaduria documental")
-    st.caption(
-        "Los PDF nuevos quedan pendientes de revision. Completa responsable, version, estado y fechas "
-        "antes de declararlos oficiales. Esta etapa aun no excluye documentos de la recuperacion."
+else:
+    st.title("Gestión del asistente")
+    st.caption("Área preparada para restringirse a administradores cuando el proyecto incorpore autenticación y roles.")
+    gestion = st.radio(
+        "Herramienta de gestión",
+        ["Documentos RAG", "Curaduría documental", "Monitoreo de calidad", "Ciclo de mejora"],
+        horizontal=True,
+        key="gestion_seccion",
     )
 
-    if catalogo_repo is None or catalogo_documentos.empty:
-        st.info("No hay documentos PDF disponibles para catalogar.")
-    else:
-        pendientes = int((catalogo_documentos["estado"] == "Pendiente de revision").sum())
-        no_disponibles = int((catalogo_documentos["disponible"] == 0).sum())
-        col_pendientes, col_no_disponibles = st.columns(2)
-        col_pendientes.metric("Pendientes de revision", pendientes)
-        col_no_disponibles.metric("Archivos no disponibles", no_disponibles)
-
-        catalogo_editado = st.data_editor(
-            catalogo_documentos,
-            hide_index=True,
-            width="stretch",
-            disabled=["archivo", "ultima_modificacion", "disponible"],
-            column_config={
-                "categoria": st.column_config.SelectboxColumn("Categoria", options=CATEGORIAS_DOCUMENTALES),
-                "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_DOCUMENTALES),
-                "responsable": st.column_config.TextColumn("Responsable"),
-                "version": st.column_config.TextColumn("Version"),
-                "fecha_vigencia": st.column_config.TextColumn("Fecha de vigencia"),
-                "proxima_revision": st.column_config.TextColumn("Proxima revision"),
-                "ultima_modificacion": st.column_config.TextColumn("Ultima modificacion"),
-                "disponible": st.column_config.CheckboxColumn("Disponible"),
-            },
-            key="editor_catalogo_documentos",
-        )
-
-        if st.button("Guardar curaduria documental", type="primary"):
-            catalogo_repo.guardar(catalogo_editado)
-            st.success("Curaduria documental guardada.")
+    if gestion == "Documentos RAG":
+        if st.button("Actualizar documentos PDF", key="gestion_actualizar_pdf", help="Vuelve a leer los PDF y reconstruye el índice al consultar."):
+            cargar_documentos_pdf.clear()
+            st.session_state.marca_documentos_pdf = obtener_marca_modificacion_pdfs()
+            st.session_state.aviso_documentos_actualizados = True
             st.rerun()
+        mostrar_documentos(documentos)
 
-with tab_monitoreo:
-    st.subheader("Monitoreo de calidad")
-    st.caption("Las metricas se guardan localmente en este equipo para identificar vacios de conocimiento.")
-
-    if monitoreo_calidad is None:
-        st.info("El monitoreo de calidad no esta disponible.")
-    else:
-        resumen_calidad = monitoreo_calidad.resumen()
-        col_total, col_sin_respuesta, col_tiempo, col_feedback = st.columns(4)
-        col_total.metric("Consultas registradas", resumen_calidad["total_consultas"])
-        col_sin_respuesta.metric("Sin respuesta", f"{resumen_calidad['tasa_sin_respuesta']:.1%}")
-        col_tiempo.metric("Tiempo promedio", f"{resumen_calidad['tiempo_promedio_ms'] / 1000:.2f} s")
-        col_feedback.metric("Feedback negativo", f"{resumen_calidad['tasa_feedback_negativo']:.1%}")
-
-        st.subheader("Preguntas recurrentes sin respuesta")
-        preguntas_sin_respuesta = monitoreo_calidad.preguntas_sin_respuesta()
-        if preguntas_sin_respuesta.empty:
-            st.info("Aun no hay preguntas sin respuesta registradas.")
+    elif gestion == "Curaduría documental":
+        st.subheader("Curaduría documental")
+        st.caption("Los PDF nuevos quedan pendientes de revisión. Completa responsable, versión, estado y fechas antes de declararlos oficiales. Esta etapa aún no excluye documentos de la recuperación.")
+        if catalogo_repo is None or catalogo_documentos.empty:
+            st.info("No hay documentos PDF disponibles para catalogar.")
         else:
-            st.dataframe(preguntas_sin_respuesta, hide_index=True, width="stretch")
-
-        st.subheader("Respuestas con feedback negativo")
-        feedback_negativo = monitoreo_calidad.feedback_negativo()
-        if feedback_negativo.empty:
-            st.info("Aun no hay feedback negativo registrado.")
-        else:
-            st.dataframe(feedback_negativo, hide_index=True, width="stretch")
-
-with tab_mejora:
-    st.subheader("Ciclo de mejora")
-    st.caption(
-        "Esta cola prioriza mejoras a partir de preguntas sin respuesta y feedback negativo. "
-        "Asigna un responsable y actualiza el estado cuando la accion sea atendida."
-    )
-
-    if monitoreo_calidad is None:
-        st.info("El ciclo de mejora no esta disponible porque el monitoreo no pudo iniciarse.")
-    else:
-        acciones_mejora = monitoreo_calidad.acciones_mejora()
-        if acciones_mejora.empty:
-            st.info("Aun no hay acciones de mejora generadas.")
-        else:
-            acciones_editadas = st.data_editor(
-                acciones_mejora,
+            pendientes = int((catalogo_documentos["estado"] == "Pendiente de revision").sum())
+            no_disponibles = int((catalogo_documentos["disponible"] == 0).sum())
+            col_pendientes, col_no_disponibles = st.columns(2)
+            col_pendientes.metric("Pendientes de revisión", pendientes)
+            col_no_disponibles.metric("Archivos no disponibles", no_disponibles)
+            catalogo_editado = st.data_editor(
+                catalogo_documentos,
                 hide_index=True,
                 width="stretch",
-                disabled=["id", "tipo", "pregunta", "ocurrencias", "recomendacion", "ultima_detectada"],
+                disabled=["archivo", "ultima_modificacion", "disponible"],
                 column_config={
-                    "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_MEJORA),
+                    "categoria": st.column_config.SelectboxColumn("Categoría", options=CATEGORIAS_DOCUMENTALES),
+                    "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_DOCUMENTALES),
                     "responsable": st.column_config.TextColumn("Responsable"),
+                    "version": st.column_config.TextColumn("Versión"),
+                    "fecha_vigencia": st.column_config.TextColumn("Fecha de vigencia"),
+                    "proxima_revision": st.column_config.TextColumn("Próxima revisión"),
+                    "ultima_modificacion": st.column_config.TextColumn("Última modificación"),
+                    "disponible": st.column_config.CheckboxColumn("Disponible"),
                 },
-                key="editor_acciones_mejora",
+                key="editor_catalogo_documentos",
             )
-
-            if st.button("Guardar acciones de mejora", type="primary"):
-                monitoreo_calidad.guardar_acciones_mejora(acciones_editadas)
-                st.success("Acciones de mejora guardadas.")
+            if st.button("Guardar curaduría documental", key="guardar_curaduria", type="primary"):
+                catalogo_repo.guardar(catalogo_editado)
+                st.success("Curaduría documental guardada.")
                 st.rerun()
+
+    elif gestion == "Monitoreo de calidad":
+        st.subheader("Monitoreo de calidad")
+        st.caption("Las métricas se guardan localmente en este equipo para identificar vacíos de conocimiento.")
+        if monitoreo_calidad is None:
+            st.info("El monitoreo de calidad no está disponible.")
+        else:
+            resumen_calidad = monitoreo_calidad.resumen()
+            col_total, col_sin_respuesta, col_tiempo, col_feedback = st.columns(4)
+            col_total.metric("Consultas registradas", resumen_calidad["total_consultas"])
+            col_sin_respuesta.metric("Sin respuesta", f"{resumen_calidad['tasa_sin_respuesta']:.1%}")
+            col_tiempo.metric("Tiempo promedio", f"{resumen_calidad['tiempo_promedio_ms'] / 1000:.2f} s")
+            col_feedback.metric("Feedback negativo", f"{resumen_calidad['tasa_feedback_negativo']:.1%}")
+            st.subheader("Preguntas recurrentes sin respuesta")
+            preguntas_sin_respuesta = monitoreo_calidad.preguntas_sin_respuesta()
+            if preguntas_sin_respuesta.empty:
+                st.info("Aún no hay preguntas sin respuesta registradas.")
+            else:
+                st.dataframe(preguntas_sin_respuesta, hide_index=True, width="stretch")
+            st.subheader("Respuestas con feedback negativo")
+            feedback_negativo = monitoreo_calidad.feedback_negativo()
+            if feedback_negativo.empty:
+                st.info("Aún no hay feedback negativo registrado.")
+            else:
+                st.dataframe(feedback_negativo, hide_index=True, width="stretch")
+
+    else:
+        st.subheader("Ciclo de mejora")
+        st.caption("Esta cola prioriza mejoras a partir de preguntas sin respuesta y feedback negativo. Asigna un responsable y actualiza el estado cuando la acción sea atendida.")
+        if monitoreo_calidad is None:
+            st.info("El ciclo de mejora no está disponible porque el monitoreo no pudo iniciarse.")
+        else:
+            acciones_mejora = monitoreo_calidad.acciones_mejora()
+            if acciones_mejora.empty:
+                st.info("Aún no hay acciones de mejora generadas.")
+            else:
+                acciones_editadas = st.data_editor(
+                    acciones_mejora,
+                    hide_index=True,
+                    width="stretch",
+                    disabled=["id", "tipo", "pregunta", "ocurrencias", "recomendacion", "ultima_detectada"],
+                    column_config={
+                        "estado": st.column_config.SelectboxColumn("Estado", options=ESTADOS_MEJORA),
+                        "responsable": st.column_config.TextColumn("Responsable"),
+                    },
+                    key="editor_acciones_mejora",
+                )
+                if st.button("Guardar acciones de mejora", key="guardar_acciones_mejora", type="primary"):
+                    monitoreo_calidad.guardar_acciones_mejora(acciones_editadas)
+                    st.success("Acciones de mejora guardadas.")
+                    st.rerun()

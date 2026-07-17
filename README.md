@@ -18,6 +18,17 @@ Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transport
 - RAG semantico con embeddings multilingues, fragmentos de documentos, agregados de negocio y ranking semantico/lexico.
 - Historial de conversacion durante la sesion.
 
+## Navegación y acceso
+
+La interfaz organiza el trabajo cotidiano en cinco secciones: **Resumen**, **Consultar a la IA**,
+**Operaciones**, **Finanzas** y **Gestión del asistente**. Viajes y mantenciones se consultan como
+subsecciones de Operaciones; los documentos RAG, la curaduría, el monitoreo y el ciclo de mejora
+se concentran en Gestión del asistente.
+
+El proyecto todavía no incorpora autenticación ni roles. Por ello, Gestión del asistente no está
+restringida de forma artificial, pero se mantiene separada para aplicar una regla de administradores
+cuando exista ese mecanismo.
+
 ## RAG semantico avanzado
 
 El proyecto conserva el RAG simple como respaldo, pero las preguntas abiertas usan `SemanticRAG` cuando las dependencias de embeddings estan disponibles.
