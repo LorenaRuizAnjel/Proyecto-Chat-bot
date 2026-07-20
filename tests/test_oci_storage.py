@@ -126,7 +126,14 @@ class OciObjectStorageTests(unittest.TestCase):
                 private_key_content="line-1\nline-2",
             )
             client_class.assert_called_once_with(
-                {"region": "sa-santiago-1"}, signer=signer
+                {
+                    "region": "sa-santiago-1",
+                    "tenancy": "tenancy-test",
+                    "user": "user-test",
+                    "fingerprint": "fingerprint-test",
+                    "key_content": "line-1\nline-2",
+                },
+                signer=signer,
             )
             self.assertIs(storage.client, client_class.return_value)
 

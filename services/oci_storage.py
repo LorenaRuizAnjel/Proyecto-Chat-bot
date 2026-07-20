@@ -95,7 +95,13 @@ class OciObjectStorage(StorageBackend):
                 private_key_content=private_key,
             )
             return oci.object_storage.ObjectStorageClient(
-                {"region": self.region},
+                {
+                    "region": self.region,
+                    "tenancy": self.tenancy_ocid,
+                    "user": self.user_ocid,
+                    "fingerprint": self.fingerprint,
+                    "key_content": private_key,
+                },
                 signer=signer,
             )
         except Exception as error:
