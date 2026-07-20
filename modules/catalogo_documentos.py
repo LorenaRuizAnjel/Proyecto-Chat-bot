@@ -25,7 +25,7 @@ ESTADOS_DOCUMENTALES = [
 class CatalogoDocumentos:
     """Catalogo persistente para la curaduria de documentos PDF."""
 
-    def __init__(self, ruta="data/catalogo_documentos.db"):
+    def __init__(self, ruta=".runtime/catalogo_documentos.db"):
         self.ruta = Path(ruta)
         self.ruta.parent.mkdir(parents=True, exist_ok=True)
         self._inicializar()

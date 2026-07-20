@@ -12,7 +12,7 @@ ESTADOS_MEJORA = ["Pendiente", "En revision", "Resuelta", "Descartada"]
 class MonitoreoCalidad:
     """Persistencia local de consultas y senales de calidad del agente."""
 
-    def __init__(self, ruta="data/operacion_agente.db"):
+    def __init__(self, ruta=".runtime/operacion_agente.db"):
         self.ruta = Path(ruta)
         self.ruta.parent.mkdir(parents=True, exist_ok=True)
         self._inicializar()

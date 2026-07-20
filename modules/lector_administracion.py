@@ -36,16 +36,16 @@ class LectorAdministracion:
         if not self.ruta_archivo.exists():
             raise FileNotFoundError(f"No se encontro el archivo: {self.ruta_archivo}")
 
-        libro = pd.ExcelFile(self.ruta_archivo)
-        hojas_faltantes = sorted(HOJAS_REQUERIDAS - set(libro.sheet_names))
+        with pd.ExcelFile(self.ruta_archivo) as libro:
+            hojas_faltantes = sorted(HOJAS_REQUERIDAS - set(libro.sheet_names))
 
-        if hojas_faltantes:
-            hojas = ", ".join(hojas_faltantes)
-            raise ValueError(f"El Excel no tiene las hojas requeridas: {hojas}")
+            if hojas_faltantes:
+                hojas = ", ".join(hojas_faltantes)
+                raise ValueError(f"El Excel no tiene las hojas requeridas: {hojas}")
 
-        facturas = pd.read_excel(libro, sheet_name="Facturas")
-        gastos = pd.read_excel(libro, sheet_name="Gastos")
-        kpis = pd.read_excel(libro, sheet_name="KPIs")
+            facturas = pd.read_excel(libro, sheet_name="Facturas")
+            gastos = pd.read_excel(libro, sheet_name="Gastos")
+            kpis = pd.read_excel(libro, sheet_name="KPIs")
 
         facturas.columns = [str(columna).strip() for columna in facturas.columns]
         gastos.columns = [str(columna).strip() for columna in gastos.columns]

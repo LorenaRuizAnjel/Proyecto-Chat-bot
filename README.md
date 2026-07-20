@@ -9,7 +9,7 @@ Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transport
 - Une los viajes de `viajes_materiales_redes` y `viajes_cosecha` en una vista operacional.
 - Mantiene las mantenciones como un conjunto separado para KPIs, rankings y contexto RAG.
 - Usa `documentos_rag` como contexto adicional para preguntas abiertas.
-- Lee automaticamente los PDF ubicados en `data/` y los agrega al contexto RAG.
+- Lee SQL, Excel y PDF exclusivamente desde un bucket privado de OCI Object Storage.
 - KPIs gerenciales: viajes, ingreso neto por tarifa flete, mantenciones, costo de mantenciones, resultado neto y guias.
 - La `Tarifa Flete` se considera ingreso neto cobrado al cliente por realizar el movimiento.
 - Los costos de mantencion se consideran egresos.
@@ -47,13 +47,13 @@ El recuperador semantico:
 
 - `app.py`: interfaz principal en Streamlit.
 - `modules/lector_sql.py`: lectura del dump, compatibilidad SQLite y normalizacion de tablas.
-- `modules/lector_pdf.py`: lectura de PDF en `data/` y preparacion en formato de documentos RAG.
+- `modules/lector_pdf.py`: procesamiento de PDF materializados temporalmente desde OCI.
+- `services/oci_storage.py`: autenticacion, listado, metadatos y descarga segura desde OCI.
+- `services/storage_factory.py`: resolucion centralizada de los objetos requeridos.
 - `modules/analizador_operacional.py`: metricas y respuestas calculadas.
 - `modules/rag.py`: RAG simple y RAG semantico hibrido para recuperar contexto relevante.
 - `modules/chatbot_openrouter.py`: cliente de OpenRouter configurado con `google/gemini-2.5-flash`.
-- `data/base_datos_chatbot_rag_transportes.sql`: base principal del chatbot.
-- `data/administracion.xlsx`: facturas, gastos y KPIs administrativos.
-- `data/*.pdf`: documentos usados como contexto adicional para el chatbot.
+- `.runtime/`: estado local generado por la aplicacion; no contiene archivos fuente.
 
 ## Configuracion
 
@@ -68,7 +68,16 @@ pip install -r requirements.txt
 
 ```bash
 OPENROUTER_API_KEY=tu_api_key_aqui
+STORAGE_BACKEND=oci
+OCI_CONFIG_PROFILE=DEFAULT
+OCI_BUCKET_NAME=nombre_bucket
+OCI_NAMESPACE=namespace
+OCI_DATA_PREFIX=data
+OCI_RAG_PREFIX=data
 ```
+
+La autenticacion OCI se obtiene de `~/.oci/config`; la clave privada nunca se guarda
+dentro del proyecto. No existe fallback hacia archivos fuente locales.
 
 El proyecto usa el identificador `google/gemini-2.5-flash` de OpenRouter. No requiere
 una API key directa de Google Gemini.
@@ -89,7 +98,7 @@ La primera consulta abierta o documental puede tardar mas porque `sentence-trans
 
 ## Actualizacion del indice documental
 
-Los embeddings de los PDF se guardan en `data/indice_documental/`. Si no cambian los
+Los embeddings de los PDF se guardan en `.runtime/indice_documental/`. Si no cambian los
 documentos, la app reutiliza ese indice; si se crea, modifica o elimina un PDF, genera
 uno nuevo. Para actualizarlo fuera de la interfaz, por ejemplo mediante una tarea diaria
 de Windows, ejecuta desde la raiz del proyecto:
@@ -105,8 +114,7 @@ Antes de publicar, verifica que estos archivos esten en el repositorio:
 - `app.py`
 - `requirements.txt`
 - `modules/`
-- `data/base_datos_chatbot_rag_transportes.sql`
-- `data/administracion.xlsx`
+- `services/`
 - `.env.example`
 
 No subas `.env` a GitHub. La API key se configura como secreto en Streamlit Cloud.

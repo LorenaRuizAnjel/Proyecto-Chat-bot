@@ -30,14 +30,22 @@ from modules.catalogo_documentos import (
     ESTADOS_DOCUMENTALES,
     CatalogoDocumentos,
 )
+from services import (
+    StorageError,
+    create_storage,
+    load_storage_settings,
+    materialize_files,
+    object_version,
+    resolve_object_name,
+)
 
 
-RUTA_SQL = "data/base_datos_chatbot_rag_transportes.sql"
-RUTA_ADMINISTRACION = "data/administracion.xlsx"
-RUTA_PDFS = "data"
-RUTA_CATALOGO_DOCUMENTOS = "data/catalogo_documentos.db"
-RUTA_MONITOREO_CALIDAD = "data/operacion_agente.db"
-RUTA_INDICE_DOCUMENTAL = "data/indice_documental"
+NOMBRE_SQL = "base_datos_chatbot_rag_transportes.sql"
+NOMBRE_ADMINISTRACION = "administracion.xlsx"
+RUTA_ESTADO_LOCAL = ".runtime"
+RUTA_CATALOGO_DOCUMENTOS = f"{RUTA_ESTADO_LOCAL}/catalogo_documentos.db"
+RUTA_MONITOREO_CALIDAD = f"{RUTA_ESTADO_LOCAL}/operacion_agente.db"
+RUTA_INDICE_DOCUMENTAL = f"{RUTA_ESTADO_LOCAL}/indice_documental"
 
 
 load_dotenv()
@@ -52,49 +60,29 @@ st.set_page_config(
 )
 
 
+@st.cache_resource(show_spinner=False)
+def obtener_almacenamiento(configuracion):
+    return create_storage(configuracion)
+
+
 @st.cache_data(show_spinner=False)
-def cargar_base(_ultima_modificacion):
-    lector = LectorSQL(RUTA_SQL)
+def cargar_base(ruta_archivo, version_objeto):
+    del version_objeto
+    lector = LectorSQL(ruta_archivo)
     return lector.cargar_base()
 
 
 @st.cache_data(show_spinner=False)
-def cargar_administracion(_ultima_modificacion):
-    lector = LectorAdministracion(RUTA_ADMINISTRACION)
+def cargar_administracion(ruta_archivo, version_objeto):
+    del version_objeto
+    lector = LectorAdministracion(ruta_archivo)
     return lector.cargar_datos()
 
 
 @st.cache_data(show_spinner=False)
-def cargar_documentos_pdf(_ultima_modificacion):
-    lector = LectorPDF(RUTA_PDFS)
-    return lector.cargar_datos()
-
-
-def obtener_marca_modificacion_pdfs():
-    carpeta = Path(RUTA_PDFS)
-    if not carpeta.exists():
-        return "sin-carpeta"
-
-    marcas = [
-        f"{archivo.name}:{archivo.stat().st_size}:{archivo.stat().st_mtime}"
-        for archivo in sorted(carpeta.glob("*.pdf"))
-    ]
-    return "|".join(marcas) if marcas else "sin-pdf"
-
-
-@st.fragment(run_every="5m")
-def vigilar_actualizaciones_pdf():
-    """Recarga la aplicacion si un PDF fue creado, modificado o eliminado."""
-    marca_actual = obtener_marca_modificacion_pdfs()
-    marca_anterior = st.session_state.get("marca_documentos_pdf")
-
-    if marca_anterior is None:
-        st.session_state.marca_documentos_pdf = marca_actual
-    elif marca_anterior != marca_actual:
-        cargar_documentos_pdf.clear()
-        st.session_state.marca_documentos_pdf = marca_actual
-        st.session_state.aviso_documentos_actualizados = True
-        st.rerun()
+def cargar_documentos_pdf(archivos, version_objetos):
+    del version_objetos
+    return LectorPDF().cargar_archivos(archivos)
 
 
 def _reiniciar_filtros(prefijo, campos):
@@ -1464,7 +1452,7 @@ def mostrar_documentos(documentos):
 
     archivo = documento_actual.get("Archivo")
     if isinstance(archivo, str) and archivo:
-        ruta_pdf = Path(RUTA_PDFS) / archivo
+        ruta_pdf = Path(str(documento_actual.get("Ruta Local", "")))
         if ruta_pdf.exists():
             st.download_button(
                 "Descargar PDF",
@@ -1481,34 +1469,6 @@ def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_c
 
     if "historial" not in st.session_state:
         st.session_state.historial = []
-
-    col_titulo, col_limpiar = st.columns([5, 1])
-    with col_titulo:
-        st.subheader("Conversación")
-    with col_limpiar:
-        if st.button("Limpiar historial", key="chat_limpiar_historial"):
-            st.session_state.historial = []
-            st.rerun()
-
-    for indice, item in enumerate(st.session_state.historial):
-        with st.chat_message("user"):
-            st.write(item["pregunta"])
-        with st.chat_message("assistant"):
-            st.write(item["respuesta"])
-            feedback = item.get("feedback")
-            columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
-            if columna_positivo.button("👍 Útil", key=f"feedback_positivo_{indice}", disabled=feedback is not None):
-                item["feedback"] = "positivo"
-                if monitoreo_calidad is not None and item.get("consulta_id"):
-                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "positivo")
-                st.toast("Gracias por tu retroalimentación.")
-            if columna_negativo.button("👎 No útil", key=f"feedback_negativo_{indice}", disabled=feedback is not None):
-                item["feedback"] = "negativo"
-                if monitoreo_calidad is not None and item.get("consulta_id"):
-                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "negativo")
-                st.toast("Gracias. Usaremos esta señal para mejorar el agente.")
-            if feedback:
-                columna_estado.caption(f"Evaluación registrada: {'Útil' if feedback == 'positivo' else 'No útil'}")
 
     st.subheader("Nueva consulta")
     ejemplos = [
@@ -1545,29 +1505,92 @@ def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_c
                     with st.expander("Detalle técnico del error", expanded=True):
                         st.exception(error)
 
+    col_titulo, col_limpiar = st.columns([5, 1])
+    with col_titulo:
+        st.subheader("Conversación")
+    with col_limpiar:
+        if st.button("Limpiar historial", key="chat_limpiar_historial"):
+            st.session_state.historial = []
+            st.rerun()
 
-vigilar_actualizaciones_pdf()
+    for indice, item in enumerate(st.session_state.historial):
+        with st.chat_message("user"):
+            st.write(item["pregunta"])
+        with st.chat_message("assistant"):
+            st.write(item["respuesta"])
+            feedback = item.get("feedback")
+            columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
+            if columna_positivo.button("👍 Útil", key=f"feedback_positivo_{indice}", disabled=feedback is not None):
+                item["feedback"] = "positivo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "positivo")
+                st.toast("Gracias por tu retroalimentación.")
+            if columna_negativo.button("👎 No útil", key=f"feedback_negativo_{indice}", disabled=feedback is not None):
+                item["feedback"] = "negativo"
+                if monitoreo_calidad is not None and item.get("consulta_id"):
+                    monitoreo_calidad.registrar_feedback(item["consulta_id"], "negativo")
+                st.toast("Gracias. Usaremos esta señal para mejorar el agente.")
+            if feedback:
+                columna_estado.caption(f"Evaluación registrada: {'Útil' if feedback == 'positivo' else 'No útil'}")
+
 
 try:
-    base = cargar_base(str(Path(RUTA_SQL).stat().st_mtime))
+    configuracion_almacenamiento = load_storage_settings()
+    almacenamiento = obtener_almacenamiento(configuracion_almacenamiento)
+    prefijo_datos = configuracion_almacenamiento.oci_data_prefix
+    objeto_sql = resolve_object_name(
+        almacenamiento,
+        prefijo_datos,
+        NOMBRE_SQL,
+    )
+    ruta_sql = almacenamiento.materialize(objeto_sql)
+    base = cargar_base(str(ruta_sql), object_version(almacenamiento, objeto_sql))
+except StorageError as error:
+    st.error(f"No fue posible obtener la base SQL desde el almacenamiento configurado. Detalle: {error}")
+    st.stop()
 except Exception as error:
     st.error(f"No fue posible cargar la base SQL. Detalle: {error}")
     st.stop()
 
 try:
-    administracion = cargar_administracion(str(Path(RUTA_ADMINISTRACION).stat().st_mtime))
+    objeto_administracion = resolve_object_name(
+        almacenamiento,
+        prefijo_datos,
+        NOMBRE_ADMINISTRACION,
+    )
+    ruta_administracion = almacenamiento.materialize(objeto_administracion)
+    administracion = cargar_administracion(
+        str(ruta_administracion),
+        object_version(almacenamiento, objeto_administracion),
+    )
+except StorageError as error:
+    administracion = {"facturas": pd.DataFrame(), "gastos": pd.DataFrame(), "kpis": pd.DataFrame()}
+    st.warning(
+        "No fue posible obtener administracion.xlsx desde el almacenamiento configurado. "
+        f"Detalle: {error}"
+    )
 except Exception as error:
     administracion = {"facturas": pd.DataFrame(), "gastos": pd.DataFrame(), "kpis": pd.DataFrame()}
     st.warning(f"No fue posible cargar administracion.xlsx. Detalle: {error}")
 
 try:
-    documentos_pdf = cargar_documentos_pdf(obtener_marca_modificacion_pdfs())
+    archivos_pdf, version_pdfs = materialize_files(
+        almacenamiento,
+        configuracion_almacenamiento.oci_rag_prefix,
+        ".pdf",
+    )
+    documentos_pdf = cargar_documentos_pdf(tuple(archivos_pdf), version_pdfs)
     carga_documentos_pdf_exitosa = True
+except StorageError as error:
+    documentos_pdf = pd.DataFrame()
+    carga_documentos_pdf_exitosa = False
+    st.warning(f"No fue posible obtener los PDF desde OCI Object Storage. Detalle: {error}")
 except Exception as error:
     documentos_pdf = pd.DataFrame()
     carga_documentos_pdf_exitosa = False
-    st.warning(f"No fue posible cargar los PDF de data/. Detalle: {error}")
+    st.warning(f"No fue posible procesar los PDF descargados desde OCI. Detalle: {error}")
 
+Path(RUTA_ESTADO_LOCAL).mkdir(parents=True, exist_ok=True)
 try:
     catalogo_repo = CatalogoDocumentos(RUTA_CATALOGO_DOCUMENTOS)
     if carga_documentos_pdf_exitosa:
@@ -1592,6 +1615,7 @@ if "Referencia ID" in documentos.columns:
 facturas = administracion["facturas"]
 gastos = administracion["gastos"]
 kpis_administracion = administracion["kpis"]
+st.sidebar.caption(f"Datos estructurados: {configuracion_almacenamiento.backend.upper()}")
 
 if st.session_state.pop("aviso_documentos_actualizados", False):
     st.toast("Los documentos PDF cambiaron y el índice fue actualizado.")
@@ -1671,7 +1695,6 @@ else:
     if gestion == "Documentos RAG":
         if st.button("Actualizar documentos PDF", key="gestion_actualizar_pdf", help="Vuelve a leer los PDF y reconstruye el índice al consultar."):
             cargar_documentos_pdf.clear()
-            st.session_state.marca_documentos_pdf = obtener_marca_modificacion_pdfs()
             st.session_state.aviso_documentos_actualizados = True
             st.rerun()
         mostrar_documentos(documentos)

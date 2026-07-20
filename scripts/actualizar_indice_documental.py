@@ -13,18 +13,25 @@ sys.path.insert(0, str(RAIZ_PROYECTO))
 
 from modules.lector_pdf import LectorPDF  # noqa: E402
 from modules.rag import SemanticRAG  # noqa: E402
+from services import create_storage, load_storage_settings, materialize_files  # noqa: E402
 
 
 def main():
-    documentos = LectorPDF(RAIZ_PROYECTO / "data").cargar_datos()
-    rag = SemanticRAG(
-        None,
-        None,
-        documentos,
-        ruta_indice=RAIZ_PROYECTO / "data" / "indice_documental",
-    )
-    estado = "reutilizado" if rag.indice_desde_disco else "actualizado"
-    print(f"Indice documental {estado}: {len(rag.docs_df)} fragmentos.")
+    settings = load_storage_settings(RAIZ_PROYECTO)
+    storage = create_storage(settings)
+    try:
+        archivos, _version = materialize_files(storage, settings.oci_rag_prefix, ".pdf")
+        documentos = LectorPDF().cargar_archivos(archivos)
+        rag = SemanticRAG(
+            None,
+            None,
+            documentos,
+            ruta_indice=RAIZ_PROYECTO / ".runtime" / "indice_documental",
+        )
+        estado = "reutilizado" if rag.indice_desde_disco else "actualizado"
+        print(f"Indice documental {estado}: {len(rag.docs_df)} fragmentos.")
+    finally:
+        storage.close()
 
 
 if __name__ == "__main__":

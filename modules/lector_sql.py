@@ -230,9 +230,3 @@ class LectorSQL:
             return 0
 
         return len([guia for guia in str(guias).replace(" - ", "-").split("-") if guia.strip()])
-
-
-if __name__ == "__main__":
-    base = LectorSQL("data/base_datos_chatbot_rag_transportes.sql").cargar_base()
-    print(base["viajes"].head())
-    print(base["mantenciones"].head())

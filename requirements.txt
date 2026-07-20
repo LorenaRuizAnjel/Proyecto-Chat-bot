@@ -7,3 +7,4 @@ sentence-transformers
 scikit-learn
 numpy
 pypdf>=4.0.0
+oci==2.182.0

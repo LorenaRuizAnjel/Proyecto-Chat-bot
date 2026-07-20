@@ -4,32 +4,31 @@ import pandas as pd
 
 
 class LectorPDF:
-    def __init__(self, ruta_carpeta="data", patron="*.pdf", largo_fragmento=1200, solapamiento=180):
-        self.ruta_carpeta = Path(ruta_carpeta)
-        self.patron = patron
+    def __init__(self, largo_fragmento=1200, solapamiento=180):
         self.largo_fragmento = largo_fragmento
         self.solapamiento = solapamiento
 
-    def cargar_datos(self):
-        if not self.ruta_carpeta.exists():
-            raise FileNotFoundError(f"No se encontro la carpeta: {self.ruta_carpeta}")
-
-        archivos = sorted(self.ruta_carpeta.glob(self.patron))
-        if not archivos:
-            return self._dataframe_vacio()
-
+    def cargar_archivos(self, archivos):
+        """Carga rutas materializadas conservando nombre y fecha del objeto remoto."""
         registros = []
-        for archivo in archivos:
-            registros.extend(self._leer_archivo(archivo))
+        for ruta, nombre, fecha_modificacion in archivos:
+            archivo = Path(ruta)
+            if not archivo.is_file():
+                raise FileNotFoundError(f"No se encontro el PDF materializado: {archivo}")
+            if archivo.stat().st_size <= 0:
+                raise ValueError(f"El PDF materializado esta vacio: {nombre}")
+            registros.extend(self._leer_archivo(archivo, nombre, fecha_modificacion))
+        return pd.DataFrame(registros) if registros else self._dataframe_vacio()
 
-        if not registros:
-            return self._dataframe_vacio()
-
-        return pd.DataFrame(registros)
-
-    def _leer_archivo(self, archivo):
+    def _leer_archivo(self, archivo, nombre=None, fecha_modificacion=None):
         texto_paginas = self._extraer_texto(archivo)
         registros = []
+        nombre_documento = Path(nombre or archivo.name)
+        fecha = (
+            pd.to_datetime(fecha_modificacion)
+            if fecha_modificacion
+            else pd.to_datetime(archivo.stat().st_mtime, unit="s")
+        )
 
         for numero_pagina, texto in texto_paginas:
             texto = self._limpiar_texto(texto)
@@ -40,12 +39,13 @@ class LectorPDF:
                 registros.append(
                     {
                         "Tipo Documento": "PDF",
-                        "Referencia Tabla": archivo.stem,
-                        "Referencia ID": f"{archivo.stem}-p{numero_pagina}-f{indice}",
+                        "Referencia Tabla": nombre_documento.stem,
+                        "Referencia ID": f"{nombre_documento.stem}-p{numero_pagina}-f{indice}",
                         "Contenido": fragmento,
-                        "Archivo": archivo.name,
+                        "Archivo": nombre_documento.name,
+                        "Ruta Local": str(archivo),
                         "Pagina": numero_pagina,
-                        "Fecha Modificacion": pd.to_datetime(archivo.stat().st_mtime, unit="s"),
+                        "Fecha Modificacion": fecha,
                     }
                 )
 
@@ -59,12 +59,12 @@ class LectorPDF:
                 "Para leer archivos PDF instala la dependencia 'pypdf' con: pip install pypdf"
             ) from error
 
-        lector = PdfReader(str(archivo))
         paginas = []
-
-        for indice, pagina in enumerate(lector.pages, start=1):
-            texto = pagina.extract_text() or ""
-            paginas.append((indice, texto))
+        with archivo.open("rb") as stream:
+            lector = PdfReader(stream)
+            for indice, pagina in enumerate(lector.pages, start=1):
+                texto = pagina.extract_text() or ""
+                paginas.append((indice, texto))
 
         return paginas
 
@@ -101,12 +101,8 @@ class LectorPDF:
                 "Referencia ID",
                 "Contenido",
                 "Archivo",
+                "Ruta Local",
                 "Pagina",
                 "Fecha Modificacion",
             ]
         )
-
-
-if __name__ == "__main__":
-    documentos = LectorPDF("data").cargar_datos()
-    print(documentos.head())

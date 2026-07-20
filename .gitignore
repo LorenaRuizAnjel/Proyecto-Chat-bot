@@ -1,7 +1,11 @@
 .env
+*.pem
+*.key
+.oci/
+oci_config*
 __pycache__/
 *.pyc
-.streamlit/
+.streamlit/secrets.toml
 .venv/
 venv/
 .agents/
@@ -10,3 +14,5 @@ venv/
 data/catalogo_documentos.db
 data/operacion_agente.db
 data/indice_documental/
+.runtime/
+data/
