@@ -1513,7 +1513,8 @@ def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_c
             st.session_state.historial = []
             st.rerun()
 
-    for indice, item in enumerate(st.session_state.historial):
+    for indice in range(len(st.session_state.historial) - 1, -1, -1):
+        item = st.session_state.historial[indice]
         with st.chat_message("user"):
             st.write(item["pregunta"])
         with st.chat_message("assistant"):
