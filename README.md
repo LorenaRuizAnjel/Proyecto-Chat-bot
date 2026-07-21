@@ -2,6 +2,36 @@
 
 Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transportes.sql`.
 
+## Aplicación desplegada
+
+La aplicación está disponible en:
+
+[Acceder al chatbot desplegado](https://proyecto-chat-bot-8xk4eitpyu3zteaxeqggge.streamlit.app)
+
+> La aplicación utiliza infraestructura gratuita y puede entrar en reposo por inactividad.
+
+## Evidencia de ejecución en la nube
+
+### Aplicación ejecutándose en Streamlit Cloud
+
+![Aplicación desplegada](evidencias/01-aplicacion-desplegada.png)
+
+### Consulta documental procesada con RAG y LLM
+
+![Consulta documental](evidencias/02-consulta-documental.png)
+
+### Respuesta respaldada por fuentes
+
+![Respuesta con fuentes](evidencias/03-respuesta-con-fuentes.png)
+
+### Registro de auditoría
+
+![Auditoría de ejecuciones](evidencias/04-auditoria-ejecuciones.png)
+
+### Registro persistente en OCI Object Storage
+
+![Registro JSON en OCI](evidencias/05-registro-json-oci.png)
+
 ## Funcionalidades
 
 - Carga el dump SQL en una base SQLite en memoria.
