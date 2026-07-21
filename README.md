@@ -154,6 +154,8 @@ Si la app no necesita responder preguntas abiertas con IA, puede funcionar sin l
 
 ## Preguntas sugeridas
 
+### Consultas operacionales calculadas
+
 - Dame un resumen general.
 - Que centros tienen mayor ingreso neto.
 - Que conductores concentran mayor ingreso neto.
@@ -161,3 +163,48 @@ Si la app no necesita responder preguntas abiertas con IA, puede funcionar sin l
 - Compara ingresos por fuente de viaje.
 - Que patentes tienen mayor costo de mantencion.
 - Que tipos de mantencion tienen mayor costo.
+
+### Consultas documentales con RAG y LLM
+
+Estas preguntas recuperan fragmentos de los PDF almacenados en OCI y generan una
+respuesta respaldada por el documento correspondiente:
+
+**Manual de gestion operacional y administrativa**
+
+- Que controles se deben completar antes de registrar un despacho.
+- Como deben registrarse las mantenciones correctivas.
+- Con que frecuencia debe la gerencia revisar los indicadores criticos.
+
+**Manual de indicadores gerenciales**
+
+- Que indicadores financieros debe revisar la gerencia.
+- Que indicadores permiten evaluar la disponibilidad y el mantenimiento de la flota.
+- Que acciones recomienda el manual ante un aumento sostenido de fallas y costos.
+
+**Catalogo de fallas frecuentes**
+
+- Que acciones se recomiendan cuando un camion presenta una falla de frenos.
+- Cuales son las posibles causas y revisiones ante un sobrecalentamiento del motor.
+- Que sintomas indican problemas en la transmision.
+- Cuando una falla obliga a dejar un vehiculo fuera de servicio.
+
+**Politica financiera y control presupuestario**
+
+- Cual es el proceso para aprobar un gasto extraordinario.
+- Que debe ocurrir cuando un area supera su presupuesto en mas de un 10 por ciento.
+- Como se deben controlar las facturas vencidas.
+- Que criterios se consideran antes de renovar el contrato de un proveedor.
+
+**Plan de mantenimiento preventivo**
+
+- Cada cuanto debe realizarse una mantencion preventiva.
+- Que elementos se revisan diariamente antes de iniciar la jornada.
+- Que actividades incluye una mantencion periodica.
+- Que informacion debe quedar registrada en cada intervencion.
+- Que beneficios entrega el mantenimiento preventivo a la flota.
+
+### Consultas que cruzan documentos
+
+- Compara los criterios para dejar un vehiculo fuera de servicio indicados en el catalogo de fallas y en el plan de mantenimiento.
+- Resume las responsabilidades de control operacional, financiero y de mantenimiento descritas en los documentos.
+- Que documentos respaldan la revision semanal de indicadores, facturas o fallas criticas.
