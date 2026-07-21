@@ -33,7 +33,6 @@ from modules.catalogo_documentos import (
     CatalogoDocumentos,
 )
 from services import (
-    OciAuditLog,
     StorageError,
     create_storage,
     load_storage_settings,
@@ -41,6 +40,7 @@ from services import (
     object_version,
     resolve_object_name,
 )
+from services.audit_log import OciAuditLog
 
 
 NOMBRE_SQL = "base_datos_chatbot_rag_transportes.sql"
