@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -86,6 +87,26 @@ class OciObjectStorageTests(unittest.TestCase):
             storage = self.build_storage(temp_dir, client)
             with self.assertRaisesRegex(StorageError, "autenticacion"):
                 storage.check_access()
+
+    def test_put_json_uploads_utf8_content(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = Mock()
+            storage = self.build_storage(temp_dir, client)
+
+            storage.put_json("auditoria/2026/registro.json", {"pregunta": "¿Cuántos viajes?"})
+
+            args, kwargs = client.put_object.call_args
+            self.assertEqual(args[:3], ("namespace-test", "bucket-test", "auditoria/2026/registro.json"))
+            self.assertEqual(json.loads(args[3].decode("utf-8"))["pregunta"], "¿Cuántos viajes?")
+            self.assertEqual(kwargs["content_type"], "application/json; charset=utf-8")
+
+    def test_put_json_rejects_unsafe_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = Mock()
+            storage = self.build_storage(temp_dir, client)
+            with self.assertRaises(StorageError):
+                storage.put_json("../registro.json", {})
+            client.put_object.assert_not_called()
 
     def test_missing_config_is_clear(self):
         with tempfile.TemporaryDirectory() as temp_dir:

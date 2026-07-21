@@ -21,6 +21,7 @@ class StorageSettings:
     oci_namespace: str
     oci_rag_prefix: str
     oci_data_prefix: str
+    oci_audit_prefix: str
     oci_region: str
     oci_user_ocid: str
     oci_tenancy_ocid: str
@@ -58,6 +59,7 @@ def load_storage_settings(project_root: str | Path | None = None) -> StorageSett
         oci_namespace=os.getenv("OCI_NAMESPACE", "axbguiv0hwl2").strip(),
         oci_rag_prefix=os.getenv("OCI_RAG_PREFIX", "data").strip(),
         oci_data_prefix=os.getenv("OCI_DATA_PREFIX", "data").strip(),
+        oci_audit_prefix=os.getenv("OCI_AUDIT_PREFIX", "auditoria/ejecuciones").strip(),
         oci_region=cloud_fields["OCI_REGION"],
         oci_user_ocid=cloud_fields["OCI_USER_OCID"],
         oci_tenancy_ocid=cloud_fields["OCI_TENANCY_OCID"],
@@ -70,6 +72,7 @@ def load_storage_settings(project_root: str | Path | None = None) -> StorageSett
             ("OCI_CONFIG_PROFILE", settings.oci_config_profile),
             ("OCI_BUCKET_NAME", settings.oci_bucket_name),
             ("OCI_NAMESPACE", settings.oci_namespace),
+            ("OCI_AUDIT_PREFIX", settings.oci_audit_prefix),
         )
         if not value
     ]

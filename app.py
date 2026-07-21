@@ -1,8 +1,10 @@
 from pathlib import Path
+import json
 import logging
 import re
 import unicodedata
 from time import perf_counter
+from uuid import uuid4
 
 import altair as alt
 import pandas as pd
@@ -31,6 +33,7 @@ from modules.catalogo_documentos import (
     CatalogoDocumentos,
 )
 from services import (
+    OciAuditLog,
     StorageError,
     create_storage,
     load_storage_settings,
@@ -1054,9 +1057,11 @@ def clasificar_intencion(pregunta):
     return "documental"
 
 
-def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None, historial=None):
+def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None, gastos=None, historial=None, traza=None):
+    traza = traza if traza is not None else {}
     respuesta_cantidad_pdf = responder_cantidad_pdf(pregunta, documentos)
     if respuesta_cantidad_pdf:
+        traza.update(tipo_consulta="inventario_documental", metodo_respuesta="calculo_local")
         st.caption("Intención detectada localmente: inventario de documentos PDF")
         return respuesta_cantidad_pdf
 
@@ -1071,17 +1076,21 @@ def responder_pregunta(pregunta, viajes, mantenciones, documentos, facturas=None
         )
 
         if intencion_semantica["tipo"] == "analitica":
-            return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, intencion_semantica, historial)
+            traza["tipo_consulta"] = "analitica"
+            return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, intencion_semantica, historial, traza)
 
         if intencion_semantica["tipo"] == "documental":
-            return responder_documental(pregunta, documentos, historial)
+            traza["tipo_consulta"] = "documental"
+            return responder_documental(pregunta, documentos, historial, traza)
 
     intencion = clasificar_intencion(pregunta)
 
     if intencion == "analitica":
-        return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, historial=historial)
+        traza["tipo_consulta"] = "analitica"
+        return responder_analitica(pregunta, viajes, mantenciones, facturas, gastos, historial=historial, traza=traza)
 
-    return responder_documental(pregunta, documentos, historial)
+    traza["tipo_consulta"] = "documental"
+    return responder_documental(pregunta, documentos, historial, traza)
 
 
 def clasificar_intencion_semantica(pregunta):
@@ -1112,7 +1121,8 @@ def mostrar_error_modelo_externo(error):
         )
 
 
-def responder_documental(pregunta, documentos=None, historial=None):
+def responder_documental(pregunta, documentos=None, historial=None, traza=None):
+    traza = traza if traza is not None else {}
     if documentos is None:
         documentos = globals().get("documentos", pd.DataFrame())
 
@@ -1129,6 +1139,8 @@ def responder_documental(pregunta, documentos=None, historial=None):
         rag_documental = RAG(None, None, documentos_pdf)
 
     contexto = rag_documental.obtener_contexto(pregunta)
+    traza["contexto_recuperado"] = contexto
+    traza["metodo_respuesta"] = "rag_documental"
 
     if contexto_documental_insuficiente(contexto):
         return (
@@ -1164,7 +1176,8 @@ def responder_documental(pregunta, documentos=None, historial=None):
         )
 
 
-def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None, gastos=None, intencion=None, historial=None):
+def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None, gastos=None, intencion=None, historial=None, traza=None):
+    traza = traza if traza is not None else {}
     if viajes is None:
         viajes = globals().get("viajes_filtrados", pd.DataFrame())
     if mantenciones is None:
@@ -1178,10 +1191,12 @@ def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None,
     respuesta_calculada = analizador.generar_respuesta_calculada(pregunta, intencion)
 
     if respuesta_calculada:
+        traza["metodo_respuesta"] = "calculo_local"
         return respuesta_calculada
 
     respuesta_administrativa = responder_analitica_administrativa(pregunta, facturas, gastos)
     if respuesta_administrativa:
+        traza["metodo_respuesta"] = "calculo_local_administrativo"
         return respuesta_administrativa
 
     @st.cache_resource(show_spinner=False)
@@ -1193,6 +1208,8 @@ def responder_analitica(pregunta, viajes=None, mantenciones=None, facturas=None,
             return RAG(viajes, mantenciones, None)
 
     contexto = construir_rag(viajes, mantenciones).obtener_contexto(pregunta)
+    traza["contexto_recuperado"] = contexto
+    traza["metodo_respuesta"] = "rag_analitico"
 
     try:
         chatbot = ChatbotOpenRouter()
@@ -1462,13 +1479,184 @@ def mostrar_documentos(documentos):
             )
 
 
-def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_calidad):
+def registrar_auditoria_segura(
+    auditoria,
+    *,
+    execution_id,
+    session_id,
+    pregunta,
+    respuesta,
+    tiempo_respuesta_ms,
+    traza,
+    versiones_datos,
+    estado="exitoso",
+    error=None,
+):
+    if auditoria is None:
+        st.warning("La auditoría OCI no está disponible; esta ejecución no quedó registrada en la nube.")
+        return
+    try:
+        auditoria.register(
+            execution_id=execution_id,
+            question=pregunta,
+            response=respuesta,
+            session_id=session_id,
+            latency_ms=tiempo_respuesta_ms,
+            model=MODELO_OPENROUTER,
+            trace=traza,
+            status=estado,
+            error=error,
+            data_versions=versiones_datos,
+        )
+    except Exception:
+        logger.exception("No fue posible registrar la ejecución en OCI Object Storage")
+        st.warning("La respuesta se procesó, pero no fue posible registrar su auditoría en OCI.")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_registros_auditoria(_auditoria, limite):
+    return _auditoria.list_records(limite)
+
+
+def mostrar_auditoria_ejecuciones(auditoria):
+    st.subheader("Auditoría de ejecuciones")
+    st.caption(
+        "Consulta los registros persistentes del agente almacenados en OCI Object Storage. "
+        "Esta vista contiene preguntas, respuestas y contexto recuperado; su acceso debe restringirse a administradores."
+    )
+
+    if auditoria is None:
+        st.error("La auditoría OCI no está disponible con la configuración actual.")
+        return
+
+    col_limite, col_actualizar = st.columns([3, 1])
+    with col_limite:
+        limite = st.slider("Registros recientes a consultar", 25, 500, 100, 25, key="auditoria_limite")
+    with col_actualizar:
+        st.write("")
+        if st.button("Actualizar", key="auditoria_actualizar", width="stretch"):
+            cargar_registros_auditoria.clear()
+            st.rerun()
+
+    with st.spinner("Leyendo registros desde OCI..."):
+        registros, fallidos = cargar_registros_auditoria(auditoria, limite)
+
+    if fallidos:
+        st.warning(f"No fue posible interpretar {len(fallidos)} objeto(s) de auditoría.")
+    if not registros:
+        st.info("Aún no hay ejecuciones registradas en el prefijo de auditoría.")
+        return
+
+    filas = []
+    for registro in registros:
+        filas.append(
+            {
+                "Fecha UTC": registro.get("timestamp_utc"),
+                "Estado": registro.get("estado", ""),
+                "Tipo": registro.get("tipo_consulta", ""),
+                "Método": registro.get("metodo_respuesta", ""),
+                "Latencia ms": registro.get("latencia_ms", 0),
+                "Fuentes": len(registro.get("fuentes") or []),
+                "Pregunta": registro.get("pregunta", ""),
+                "ID ejecución": registro.get("execution_id", ""),
+            }
+        )
+    resumen = pd.DataFrame(filas)
+    resumen["Fecha UTC"] = pd.to_datetime(resumen["Fecha UTC"], errors="coerce", utc=True)
+
+    col_busqueda, col_estado = st.columns([3, 1])
+    with col_busqueda:
+        busqueda = st.text_input("Buscar en pregunta o ID", key="auditoria_busqueda").strip().lower()
+    with col_estado:
+        estados_disponibles = sorted(valor for valor in resumen["Estado"].dropna().unique() if valor)
+        estados = st.multiselect("Estado", estados_disponibles, key="auditoria_estados")
+
+    filtrado = resumen.copy()
+    if busqueda:
+        mascara = (
+            filtrado["Pregunta"].fillna("").astype(str).str.lower().str.contains(busqueda, regex=False)
+            | filtrado["ID ejecución"].fillna("").astype(str).str.lower().str.contains(busqueda, regex=False)
+        )
+        filtrado = filtrado[mascara]
+    if estados:
+        filtrado = filtrado[filtrado["Estado"].isin(estados)]
+
+    total = len(filtrado)
+    errores = int((filtrado["Estado"] == "error").sum()) if total else 0
+    latencia = pd.to_numeric(filtrado["Latencia ms"], errors="coerce").mean() if total else 0
+    latencia = float(latencia) if pd.notna(latencia) else 0.0
+    con_fuentes = int((pd.to_numeric(filtrado["Fuentes"], errors="coerce") > 0).sum()) if total else 0
+    col_total, col_errores, col_latencia, col_fuentes = st.columns(4)
+    col_total.metric("Ejecuciones", total)
+    col_errores.metric("Errores", errores)
+    col_latencia.metric("Latencia promedio", f"{latencia / 1000:.2f} s")
+    col_fuentes.metric("Con fuentes", con_fuentes)
+
+    if filtrado.empty:
+        st.info("No hay registros que coincidan con los filtros.")
+        return
+
+    st.dataframe(filtrado, hide_index=True, width="stretch")
+
+    ids_visibles = filtrado["ID ejecución"].dropna().astype(str).tolist()
+    preguntas_por_id = dict(zip(filtrado["ID ejecución"].astype(str), filtrado["Pregunta"].astype(str)))
+    execution_id = st.selectbox(
+        "Ver detalle de una ejecución",
+        ids_visibles,
+        format_func=lambda value: f"{value[:8]} — {preguntas_por_id.get(value, '')[:90]}",
+        key="auditoria_detalle_id",
+    )
+    registro = next(item for item in registros if str(item.get("execution_id", "")) == execution_id)
+
+    st.caption(f"Objeto OCI: {registro.get('_objeto_oci', '')}")
+    tab_respuesta, tab_contexto, tab_metadatos = st.tabs(["Respuesta", "Contexto y fuentes", "Metadatos"])
+    with tab_respuesta:
+        st.markdown("**Pregunta**")
+        st.write(registro.get("pregunta") or "Sin pregunta registrada.")
+        st.markdown("**Respuesta**")
+        st.write(registro.get("respuesta") or "Sin respuesta registrada.")
+        if registro.get("error"):
+            st.error(registro["error"])
+    with tab_contexto:
+        fuentes = registro.get("fuentes") or []
+        if fuentes:
+            st.dataframe(pd.DataFrame(fuentes), hide_index=True, width="stretch")
+        else:
+            st.info("La ejecución no registró fuentes documentales.")
+        st.text_area(
+            "Contexto recuperado",
+            value=str(registro.get("contexto_recuperado") or ""),
+            height=320,
+            disabled=True,
+            key=f"auditoria_contexto_{execution_id}",
+        )
+    with tab_metadatos:
+        metadatos = {
+            clave: valor
+            for clave, valor in registro.items()
+            if clave not in {"pregunta", "respuesta", "contexto_recuperado", "fuentes"}
+        }
+        st.json(metadatos)
+
+    registro_descarga = {clave: valor for clave, valor in registro.items() if not clave.startswith("_")}
+    st.download_button(
+        "Descargar registro JSON",
+        data=json.dumps(registro_descarga, ensure_ascii=False, indent=2),
+        file_name=f"ejecucion-{execution_id}.json",
+        mime="application/json",
+        key=f"auditoria_descargar_{execution_id}",
+    )
+
+
+def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_calidad, auditoria, versiones_datos):
     st.title("Consultar a la IA")
     st.info("Estás conversando con un agente de IA. Verifica las fuentes documentales antes de tomar decisiones.")
     st.caption("La consulta utiliza la base disponible completa; los filtros de Operaciones y Finanzas no afectan esta conversación.")
 
     if "historial" not in st.session_state:
         st.session_state.historial = []
+    if "audit_session_id" not in st.session_state:
+        st.session_state.audit_session_id = str(uuid4())
 
     st.subheader("Nueva consulta")
     ejemplos = [
@@ -1490,16 +1678,58 @@ def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_c
             st.warning("Debes escribir o seleccionar una pregunta.")
         else:
             with st.spinner("Analizando datos y documentos..."):
+                execution_id = str(uuid4())
+                traza = {}
+                inicio_consulta = perf_counter()
                 try:
-                    inicio_consulta = perf_counter()
-                    respuesta = responder_pregunta(consulta, viajes, mantenciones, documentos, facturas, gastos, st.session_state.historial)
+                    respuesta = responder_pregunta(
+                        consulta,
+                        viajes,
+                        mantenciones,
+                        documentos,
+                        facturas,
+                        gastos,
+                        st.session_state.historial,
+                        traza,
+                    )
                     tiempo_respuesta_ms = (perf_counter() - inicio_consulta) * 1000
                     consulta_id = None
                     if monitoreo_calidad is not None:
                         consulta_id = monitoreo_calidad.registrar_consulta(consulta, respuesta, tiempo_respuesta_ms, MODELO_OPENROUTER)
-                    st.session_state.historial.append({"pregunta": consulta, "respuesta": respuesta, "feedback": None, "consulta_id": consulta_id})
+                    registrar_auditoria_segura(
+                        auditoria,
+                        execution_id=execution_id,
+                        session_id=st.session_state.audit_session_id,
+                        pregunta=consulta,
+                        respuesta=respuesta,
+                        tiempo_respuesta_ms=tiempo_respuesta_ms,
+                        traza=traza,
+                        versiones_datos=versiones_datos,
+                    )
+                    st.session_state.historial.append(
+                        {
+                            "pregunta": consulta,
+                            "respuesta": respuesta,
+                            "feedback": None,
+                            "consulta_id": consulta_id,
+                            "execution_id": execution_id,
+                        }
+                    )
                     st.rerun()
                 except Exception as error:
+                    tiempo_respuesta_ms = (perf_counter() - inicio_consulta) * 1000
+                    registrar_auditoria_segura(
+                        auditoria,
+                        execution_id=execution_id,
+                        session_id=st.session_state.audit_session_id,
+                        pregunta=consulta,
+                        respuesta=None,
+                        tiempo_respuesta_ms=tiempo_respuesta_ms,
+                        traza=traza,
+                        versiones_datos=versiones_datos,
+                        estado="error",
+                        error={"tipo": type(error).__name__, "mensaje": str(error)[:500]},
+                    )
                     logger.exception("Error inesperado al generar la respuesta")
                     st.error(f"No se pudo generar la respuesta. Detalle: {error}")
                     with st.expander("Detalle técnico del error", expanded=True):
@@ -1519,6 +1749,8 @@ def mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_c
             st.write(item["pregunta"])
         with st.chat_message("assistant"):
             st.write(item["respuesta"])
+            if item.get("execution_id"):
+                st.caption(f"ID de ejecución: {item['execution_id']}")
             feedback = item.get("feedback")
             columna_positivo, columna_negativo, columna_estado = st.columns([1, 1, 4])
             if columna_positivo.button("👍 Útil", key=f"feedback_positivo_{indice}", disabled=feedback is not None):
@@ -1545,7 +1777,8 @@ try:
         NOMBRE_SQL,
     )
     ruta_sql = almacenamiento.materialize(objeto_sql)
-    base = cargar_base(str(ruta_sql), object_version(almacenamiento, objeto_sql))
+    version_sql = object_version(almacenamiento, objeto_sql)
+    base = cargar_base(str(ruta_sql), version_sql)
 except StorageError as error:
     st.error(f"No fue posible obtener la base SQL desde el almacenamiento configurado. Detalle: {error}")
     st.stop()
@@ -1553,6 +1786,7 @@ except Exception as error:
     st.error(f"No fue posible cargar la base SQL. Detalle: {error}")
     st.stop()
 
+version_administracion = None
 try:
     objeto_administracion = resolve_object_name(
         almacenamiento,
@@ -1560,9 +1794,10 @@ try:
         NOMBRE_ADMINISTRACION,
     )
     ruta_administracion = almacenamiento.materialize(objeto_administracion)
+    version_administracion = object_version(almacenamiento, objeto_administracion)
     administracion = cargar_administracion(
         str(ruta_administracion),
-        object_version(almacenamiento, objeto_administracion),
+        version_administracion,
     )
 except StorageError as error:
     administracion = {"facturas": pd.DataFrame(), "gastos": pd.DataFrame(), "kpis": pd.DataFrame()}
@@ -1574,6 +1809,7 @@ except Exception as error:
     administracion = {"facturas": pd.DataFrame(), "gastos": pd.DataFrame(), "kpis": pd.DataFrame()}
     st.warning(f"No fue posible cargar administracion.xlsx. Detalle: {error}")
 
+version_pdfs = ""
 try:
     archivos_pdf, version_pdfs = materialize_files(
         almacenamiento,
@@ -1590,6 +1826,21 @@ except Exception as error:
     documentos_pdf = pd.DataFrame()
     carga_documentos_pdf_exitosa = False
     st.warning(f"No fue posible procesar los PDF descargados desde OCI. Detalle: {error}")
+
+try:
+    auditoria_oci = OciAuditLog(
+        almacenamiento,
+        prefix=configuracion_almacenamiento.oci_audit_prefix,
+    )
+except Exception as error:
+    auditoria_oci = None
+    st.warning(f"No fue posible configurar la auditoría en OCI. Detalle: {error}")
+
+versiones_datos = {
+    "sql": version_sql,
+    "administracion": version_administracion,
+    "pdfs": version_pdfs,
+}
 
 Path(RUTA_ESTADO_LOCAL).mkdir(parents=True, exist_ok=True)
 try:
@@ -1637,7 +1888,16 @@ if seccion == "Resumen":
     mostrar_resumen(viajes, mantenciones, facturas, catalogo_documentos, monitoreo_calidad)
 
 elif seccion == "Consultar a la IA":
-    mostrar_chat(viajes, mantenciones, documentos, facturas, gastos, monitoreo_calidad)
+    mostrar_chat(
+        viajes,
+        mantenciones,
+        documentos,
+        facturas,
+        gastos,
+        monitoreo_calidad,
+        auditoria_oci,
+        versiones_datos,
+    )
 
 elif seccion == "Operaciones":
     st.title("Operaciones")
@@ -1688,7 +1948,7 @@ else:
     st.caption("Área preparada para restringirse a administradores cuando el proyecto incorpore autenticación y roles.")
     gestion = st.radio(
         "Herramienta de gestión",
-        ["Documentos RAG", "Curaduría documental", "Monitoreo de calidad", "Ciclo de mejora"],
+        ["Documentos RAG", "Curaduría documental", "Monitoreo de calidad", "Auditoría de ejecuciones", "Ciclo de mejora"],
         horizontal=True,
         key="gestion_seccion",
     )
@@ -1757,6 +2017,9 @@ else:
                 st.info("Aún no hay feedback negativo registrado.")
             else:
                 st.dataframe(feedback_negativo, hide_index=True, width="stretch")
+
+    elif gestion == "Auditoría de ejecuciones":
+        mostrar_auditoria_ejecuciones(auditoria_oci)
 
     else:
         st.subheader("Ciclo de mejora")

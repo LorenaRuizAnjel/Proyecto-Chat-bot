@@ -15,6 +15,7 @@ class StorageSettingsTests(unittest.TestCase):
         ):
             settings = load_storage_settings(temp_dir)
             self.assertEqual(settings.backend, "oci")
+            self.assertEqual(settings.oci_audit_prefix, "auditoria/ejecuciones")
 
     def test_rejects_unknown_backend(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

@@ -44,6 +44,8 @@ OCI_NAMESPACE = "axbguiv0hwl2"
 OCI_BUCKET_NAME = "bucket-20260720-1446"
 OCI_DATA_PREFIX = "data"
 OCI_RAG_PREFIX = "data"
+OCI_AUDIT_PREFIX = "auditoria/ejecuciones"
+APP_VERSION = "HASH_DEL_COMMIT_DESPLEGADO"
 
 OCI_USER_OCID = "TU_USER_OCID"
 OCI_TENANCY_OCID = "TU_TENANCY_OCID"
@@ -60,8 +62,14 @@ SDK de OCI directamente desde Secrets y no se escribe en el repositorio.
 
 ## 3. Comprobar permisos OCI
 
-La identidad configurada debe poder inspeccionar el bucket, listar objetos y leer
-objetos. No necesita permisos para crear, reemplazar ni eliminar objetos.
+La identidad configurada debe poder inspeccionar el bucket, listar y leer los objetos
+de datos. Ademas, debe poder crear objetos bajo el prefijo
+`auditoria/ejecuciones/`. No necesita permiso para reemplazar ni eliminar registros de
+auditoria; cada ejecucion usa un nombre unico e inmutable.
+
+Una politica OCI equivalente debe conceder lectura sobre los datos y `OBJECT_CREATE`
+sobre el bucket de auditoria. Si se usa el mismo bucket, limita el permiso de escritura
+al prefijo de auditoria mediante las condiciones de IAM disponibles en la cuenta.
 
 ## 4. Publicar el codigo en GitHub
 
@@ -95,7 +103,10 @@ Comprueba en este orden:
 3. Finanzas contiene facturas y gastos.
 4. Gestion del asistente muestra los cinco PDF.
 5. Una pregunta sobre mantenimiento preventivo devuelve contexto documental.
-6. Los logs no muestran `config`, `key_file`, `NotAuthenticated` ni `NotAuthorized`.
+6. La respuesta muestra un `ID de ejecucion`.
+7. OCI contiene un JSON nuevo bajo `auditoria/ejecuciones/YYYY/MM/DD/` con ese ID.
+8. `Gestion del asistente > Auditoria de ejecuciones` muestra el registro y permite descargarlo.
+9. Los logs no muestran `config`, `key_file`, `NotAuthenticated` ni `NotAuthorized`.
 
 `.runtime/` es efimero en Community Cloud. El indice RAG puede reconstruirse, pero el
 catalogo, feedback y monitoreo local pueden reiniciarse cuando el contenedor se recrea.

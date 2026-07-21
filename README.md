@@ -17,6 +17,8 @@ Aplicacion en Streamlit para consultar la base `base_datos_chatbot_rag_transport
 - Uso de Gemini 2.5 Flash mediante OpenRouter para preguntas abiertas, con contexto recuperado por RAG semantico hibrido.
 - RAG semantico con embeddings multilingues, fragmentos de documentos, agregados de negocio y ranking semantico/lexico.
 - Historial de conversacion durante la sesion.
+- Auditoria persistente en OCI Object Storage: un JSON por consulta con pregunta,
+  contexto recuperado, fuentes, respuesta, latencia, versiones y estado de ejecucion.
 
 ## Navegación y acceso
 
@@ -74,10 +76,20 @@ OCI_BUCKET_NAME=nombre_bucket
 OCI_NAMESPACE=namespace
 OCI_DATA_PREFIX=data
 OCI_RAG_PREFIX=data
+OCI_AUDIT_PREFIX=auditoria/ejecuciones
+APP_VERSION=hash_del_commit_desplegado
 ```
 
 La autenticacion OCI se obtiene de `~/.oci/config`; la clave privada nunca se guarda
 dentro del proyecto. No existe fallback hacia archivos fuente locales.
+
+Cada consulta crea un objeto bajo `OCI_AUDIT_PREFIX/YYYY/MM/DD/`. La identidad OCI
+necesita permiso para crear objetos en ese prefijo. El identificador mostrado junto a
+la respuesta permite relacionar la conversacion con su JSON de auditoria.
+
+La vista **Gestion del asistente > Auditoria de ejecuciones** permite consultar los
+registros recientes, filtrar por estado o pregunta, revisar respuesta, contexto,
+fuentes y metadatos, y descargar cada ejecucion como JSON.
 
 El proyecto usa el identificador `google/gemini-2.5-flash` de OpenRouter. No requiere
 una API key directa de Google Gemini.

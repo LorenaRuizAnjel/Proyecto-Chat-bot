@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 
@@ -184,6 +185,25 @@ class OciObjectStorage(StorageBackend):
         except Exception as error:
             if temporary.exists():
                 temporary.unlink()
+            raise self._translate_error(error, resource="object") from error
+
+    def put_json(self, object_name: str, payload: dict) -> None:
+        """Guarda un registro JSON en OCI sin escribirlo primero en el disco local."""
+        validate_object_name(object_name)
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        try:
+            self.client.put_object(
+                self.namespace,
+                self.bucket_name,
+                object_name,
+                body,
+                content_type="application/json; charset=utf-8",
+            )
+        except Exception as error:
             raise self._translate_error(error, resource="object") from error
 
     def close(self) -> None:
